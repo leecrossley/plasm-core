@@ -575,6 +575,35 @@ Then configure your MCP client:
 
 Use the same URL in Claude Desktop, Cursor, or any client that supports Streamable HTTP MCP. This local server does not require an MCP transport API key; provider credentials are only for outbound calls to the API catalog you loaded.
 
+## Roadmap
+
+The current system proves a narrow thing: a typed domain model can compile into a compact prompt language, a parser, runtime validation, a CLI, HTTP execution, MCP tools, paging, refs, traces, and correction feedback. The next research direction is to apply that compiler shape beyond ordinary API connectors.
+
+### Instance Languages
+
+Plasm catalogs are currently written for API domains like GitHub, D&D 5e, Spotify, EVM ERC-20 contracts, and GraphQL-backed services. The same idea should apply to **instance languages**: a grammar compiled for one concrete spreadsheet, database schema, warehouse model, or project workspace.
+
+Instead of teaching a model generic SQL or vague spreadsheet instructions, a catalog could expose the actual tables, sheets, ranges, columns, joins, constraints, and allowed mutations for that instance:
+
+```plasm
+Invoice{status=overdue, customer=Customer(name=acme)}
+SheetRow{sheet=Q2Forecast, region=emea, confidence<0.7}[owner,next_action]
+```
+
+The evidence is already in the shape of CGS: entities, fields, relations, typed filters, projections, and scoped queries are not inherently HTTP-specific. CML currently maps those forms to HTTP, GraphQL, and EVM-style transports; more execution targets can be added underneath the same prompt contract.
+
+### Prompt-Native Plasm
+
+MCP is a useful transport, but it is not the essence of Plasm. The compact `dump_prompt` surface, REPL, parser, type checker, and correction loop already exist independently of MCP. A future mode could use Plasm more like BAML: compile a task-specific prompt contract, ask the model to emit Plasm directly, parse/type-check the response, and execute or validate it without wrapping the interaction in MCP tool calls.
+
+That path should be more efficient for workflows where the model only needs a grammar and a validator, not a networked tool registry. MCP can remain one delivery mechanism; Plasm can also be a prompt-native language for structured model output.
+
+### Bidirectional Agent Communication
+
+Today the language is mostly used for tool invocation: model emits expression, runtime returns normalized value, page, ref, side effect, artifact, or correction feedback. That is already more like a typed dialogue than a one-shot function call.
+
+A future direction is to use Plasm for **bidirectional agentic communication**: typed requests, replies, delegations, review comments, commitments, and handoff artifacts between agents. The same pieces that make tool calls tractable also matter there: compact symbols, declared domain semantics, projections, refs to archived context, and correction feedback when a message does not match the shared contract.
+
 ## License
 
 Plasm is licensed under the [Business Source License 1.1](LICENSE). The Change
