@@ -1,6 +1,6 @@
-# Plasm
+# Plasm - Compiled tools for AI agents.
 
-**Compiled tools for AI agents.** Most agent stacks hand the model a wall of JSON schemas, ask it to synthesize a valid payload, then pay again when malformed calls need validation, retries, and repair prompts. Plasm takes a different route: compile real API surfaces into a small, typed instruction layer that both the model and runtime understand.
+Most agent stacks hand the model a wall of JSON schemas, ask it to synthesize a valid payload, then pay again when malformed calls need validation, retries, and repair prompts. Plasm takes a different route: compile real API surfaces into a small, typed instruction layer that both the model and runtime understand.
 
 For example, `dump_prompt apis/github` renders a compact GitHub instruction surface like this:
 
