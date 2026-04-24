@@ -328,46 +328,47 @@ This workspace ships `plasm-agent` and `plasm-mcp` for local use: HTTP discovery
 
 The `apis/` directory contains curated CGS/CML packages you can load directly with `--schema apis/<name>` or pack into plugin catalogs with `plasm-pack-plugins`.
 
+Catalogs are independent of transport. The same CGS entity/capability model can compile through REST/HTTP, GraphQL-over-HTTP, EVM reads, or future transports added to CML without changing the agent-facing expression layer.
 
-| API                                        | What it covers                                                                                |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `[clickup](apis/clickup/)`                 | ClickUp workspaces, tasks, lists, and related project-management objects                      |
-| `[discord](apis/discord/)`                 | Discord guild/channel/message style API surface                                               |
-| `[dnd5e](apis/dnd5e/)`                     | D&D 5e SRD public API                                                                         |
-| `[evm-erc20](apis/evm-erc20/)`             | EVM ERC-20 reads                                                                              |
-| `[figma](apis/figma/)`                     | Figma API surface                                                                             |
-| `[github](apis/github/)`                   | GitHub repositories, issues, sub-issues, issue types, PRs, reviews, Actions, files, and users |
-| `[gitlab](apis/gitlab/)`                   | GitLab projects, issues, and merge requests                                                   |
-| `[gmail](apis/gmail/)`                     | Gmail mailbox operations                                                                      |
-| `[google-calendar](apis/google-calendar/)` | Google Calendar events and calendars                                                          |
-| `[google-docs](apis/google-docs/)`         | Google Docs get/create/batch update operations                                                |
-| `[google-drive](apis/google-drive/)`       | Google Drive files, sharing, comments, drives, and changes                                    |
-| `[google-sheets](apis/google-sheets/)`     | Google Sheets values, batches, and metadata                                                   |
-| `[graphqlzero](apis/graphqlzero/)`         | GraphQLZero / JSONPlaceholder-style GraphQL                                                   |
-| `[hackernews](apis/hackernews/)`           | Hacker News Firebase and Algolia search                                                       |
-| `[jira](apis/jira/)`                       | Jira Cloud REST                                                                               |
-| `[linkedin](apis/linkedin/)`               | LinkedIn profile and posting/query surfaces                                                   |
-| `[linear](apis/linear/)`                   | Linear GraphQL issues and comments                                                            |
-| `[microsoft-teams](apis/microsoft-teams/)` | Microsoft Teams via Microsoft Graph                                                           |
-| `[musixmatch](apis/musixmatch/)`           | Musixmatch lyrics and related entities                                                        |
-| `[notion](apis/notion/)`                   | Notion bearer-auth reads/search and database rows                                             |
-| `[nytimes](apis/nytimes/)`                 | New York Times developer APIs                                                                 |
-| `[omdb](apis/omdb/)`                       | OMDb movie data                                                                               |
-| `[openbrewerydb](apis/openbrewerydb/)`     | Open Brewery DB                                                                               |
-| `[openmeteo](apis/openmeteo/)`             | Open-Meteo weather                                                                            |
-| `[outlook](apis/outlook/)`                 | Outlook mail folders, messages, and attachments                                               |
-| `[pokeapi](apis/pokeapi/)`                 | PokéAPI full surface                                                                          |
-| `[rawg](apis/rawg/)`                       | RAWG games                                                                                    |
-| `[reddit](apis/reddit/)`                   | Reddit OAuth identity, subreddits, posts, comments, and search                                |
-| `[rickandmorty](apis/rickandmorty/)`       | Rick and Morty API                                                                            |
-| `[slack](apis/slack/)`                     | Slack Web API                                                                                 |
-| `[spotify](apis/spotify/)`                 | Spotify Web API                                                                               |
-| `[tau2_retail](apis/tau2_retail/)`         | Tau2 retail test domain                                                                       |
-| `[tavily](apis/tavily/)`                   | Tavily search, extract, and research                                                          |
-| `[themealdb](apis/themealdb/)`             | TheMealDB                                                                                     |
-| `[twitter](apis/twitter/)`                 | X API v2 posts, users, lists, and OAuth scope map                                             |
-| `[vultr](apis/vultr/)`                     | Vultr public HTTP v2                                                                          |
-| `[xkcd](apis/xkcd/)`                       | xkcd JSON API                                                                                 |
+| API                                      | What it covers                                                                                |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [clickup](apis/clickup/)                 | ClickUp workspaces, tasks, lists, and related project-management objects                      |
+| [discord](apis/discord/)                 | Discord guild/channel/message style API surface                                               |
+| [dnd5e](apis/dnd5e/)                     | D&D 5e SRD public API                                                                         |
+| [evm-erc20](apis/evm-erc20/)             | EVM ERC-20 reads                                                                              |
+| [figma](apis/figma/)                     | Figma API surface                                                                             |
+| [github](apis/github/)                   | GitHub repositories, issues, sub-issues, issue types, PRs, reviews, Actions, files, and users |
+| [gitlab](apis/gitlab/)                   | GitLab projects, issues, and merge requests                                                   |
+| [gmail](apis/gmail/)                     | Gmail mailbox operations                                                                      |
+| [google-calendar](apis/google-calendar/) | Google Calendar events and calendars                                                          |
+| [google-docs](apis/google-docs/)         | Google Docs get/create/batch update operations                                                |
+| [google-drive](apis/google-drive/)       | Google Drive files, sharing, comments, drives, and changes                                    |
+| [google-sheets](apis/google-sheets/)     | Google Sheets values, batches, and metadata                                                   |
+| [graphqlzero](apis/graphqlzero/)         | GraphQLZero / JSONPlaceholder-style GraphQL                                                   |
+| [hackernews](apis/hackernews/)           | Hacker News Firebase and Algolia search                                                       |
+| [jira](apis/jira/)                       | Jira Cloud REST                                                                               |
+| [linkedin](apis/linkedin/)               | LinkedIn profile and posting/query surfaces                                                   |
+| [linear](apis/linear/)                   | Linear GraphQL issues and comments                                                            |
+| [microsoft-teams](apis/microsoft-teams/) | Microsoft Teams via Microsoft Graph                                                           |
+| [musixmatch](apis/musixmatch/)           | Musixmatch lyrics and related entities                                                        |
+| [notion](apis/notion/)                   | Notion bearer-auth reads/search and database rows                                             |
+| [nytimes](apis/nytimes/)                 | New York Times developer APIs                                                                 |
+| [omdb](apis/omdb/)                       | OMDb movie data                                                                               |
+| [openbrewerydb](apis/openbrewerydb/)     | Open Brewery DB                                                                               |
+| [openmeteo](apis/openmeteo/)             | Open-Meteo weather                                                                            |
+| [outlook](apis/outlook/)                 | Outlook mail folders, messages, and attachments                                               |
+| [pokeapi](apis/pokeapi/)                 | PokéAPI full surface                                                                          |
+| [rawg](apis/rawg/)                       | RAWG games                                                                                    |
+| [reddit](apis/reddit/)                   | Reddit OAuth identity, subreddits, posts, comments, and search                                |
+| [rickandmorty](apis/rickandmorty/)       | Rick and Morty API                                                                            |
+| [slack](apis/slack/)                     | Slack Web API                                                                                 |
+| [spotify](apis/spotify/)                 | Spotify Web API                                                                               |
+| [tau2_retail](apis/tau2_retail/)         | Tau2 retail test domain                                                                       |
+| [tavily](apis/tavily/)                   | Tavily search, extract, and research                                                          |
+| [themealdb](apis/themealdb/)             | TheMealDB                                                                                     |
+| [twitter](apis/twitter/)                 | X API v2 posts, users, lists, and OAuth scope map                                             |
+| [vultr](apis/vultr/)                     | Vultr public HTTP v2                                                                          |
+| [xkcd](apis/xkcd/)                       | xkcd JSON API                                                                                 |
 
 
 ## Prerequisites
