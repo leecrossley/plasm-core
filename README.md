@@ -29,6 +29,248 @@ That difference gets larger once an agent needs more than one API. Plasm support
 
 That means the agent works with **entities, relations, projections, and capabilities** instead of a flat pile of tool names and argument objects. The runtime can reject impossible calls before they hit a backend, batch graph-shaped work, attach multiple APIs to one session, and keep prompt volume lower as the tool surface grows. The goal is not “more connectors”; it is a tighter tool layer where schema compliance stops being the model’s job.
 
+## Federation
+
+Most MCP servers expose one fixed list of tools. Plasm exposes a catalog and lets the agent build a working set by intent.
+
+The flow is:
+
+```text
+discover_capabilities("triage GitHub issues and notify Slack")
+  -> candidate entities from github, slack, linear, ...
+add_capabilities([{ api: "github", entity: "Issue" },
+                  { api: "github", entity: "PullRequest" },
+                  { api: "slack",  entity: "Message" }])
+  -> one session-local Plasm language
+plasm([...])
+  -> expressions over that shared symbol space
+```
+
+That session is **federated**, not flattened. Each catalog keeps its own CGS/CML graph and backend. The prompt renderer assigns append-only `e#`, `m#`, and `p#` symbols across everything the session has learned, while the runtime remembers which catalog owns each exposed entity and dispatches each expression to the right backend.
+
+This gives agents a few useful properties:
+
+- **Incremental context:** add GitHub issues first, then Slack messages later; existing symbols keep their meaning.
+- **Intent-shaped prompts:** discover only the entities needed for the task instead of loading every tool from every integration.
+- **Typed boundaries:** a GitHub `Issue`, Linear `Issue`, and Slack `Message` can coexist without pretending their schemas merged.
+- **Planner-like execution:** the model works over a typed graph of capabilities, refs, projections, pages, and side effects; Plasm handles transport dispatch and result normalization underneath.
+
+The important constraint is that federation does **not** magically join unrelated APIs by shared field names. Cross-API workflows are composed by the agent and runtime over typed refs and returned values; each API catalog remains independently authored, validated, and executed.
+
+## Normalized results
+
+APIs do not agree on result shape. One endpoint returns a bare array, another wraps rows under `items`, another hides the next page in a cursor URL, and writes may return a resource, a status body, or nothing useful. Plasm normalizes those differences into a small monadic return value the agent can reason about: one expression in, one typed value out, with *projections*, refs, paging, and side effects represented consistently.
+
+One expression does **not** always mean one HTTP request. The expression is the semantic unit; the runtime may fan it out into the calls needed to satisfy it: relation traversal, scoped child queries, implicit get-after-query hydration, projection hydration, pagination, or cache reads. The agent still gets one normalized value or table back, plus execution stats showing how many backend calls were made.
+
+```text
+expr -> Value<T>
+
+Entity get        -> Ref<Entity> + projected fields
+Entity query      -> Page<Entity> + stable refs + next-page handle
+Projection        -> Value<{ selected fields only }>
+Relation          -> query scoped by the parent ref
+Create/update     -> Ref<Entity> + fields provided by the response
+Side effect       -> Unit, with the declared domain effect
+```
+
+The model asks for the shape it needs, not the vendor's transport envelope. A projection is explicit:
+
+```plasm
+e5(p304="plasm", p319="plasm", p297=42)[p350,p336]
+```
+
+In REPL table mode, the same normalization is visible without squinting at JSON. This command:
+
+```bash
+printf ':output table\nAbilityScore("str")[name,full_name]\nAbilityScore{}\n:quit\n' | \
+  cargo run -q -p plasm-repl -- \
+    --schema apis/dnd5e --backend https://www.dnd5eapi.co \
+    --focus AbilityScore --output table
+```
+
+returns a projected monadic value as a tiny table:
+
+```text
+plasm> AbilityScore("str")[name,full_name]
+→ Get(AbilityScore:str)
+  projection: [name, full_name]
+name  full_name
+----  ---------
+STR   Strength
+
+(1 result, Live, 516ms, 1 http call)
+```
+
+and a list expression as normalized entity rows:
+
+```text
+plasm> AbilityScore{}
+→ Query(AbilityScore all) cap=ability_score_query
+index  name  full_name  desc
+-----  ----  ---------  ----------------------------------------------------------------
+cha    CHA
+con    CON
+dex    DEX
+int    INT
+str    STR   Strength   [Strength measures bodily power, athletic training, ...]
+wis    WIS
+
+(6 results, Live, 176ms, 1 http call)
+```
+
+On a richer endpoint, the same table may be the result of many backend calls. For example, a paginated Pokémon query hydrates the 20 returned refs into full rows:
+
+```text
+plasm> Pokemon{}
+→ Query(Pokemon all) cap=pokemon_query
+id  name        base_experience  height  is_default  order  weight  species
+--  ----------  ---------------  ------  ----------  -----  ------  ----------
+1   bulbasaur   64               7       true        1      69      bulbasaur
+2   ivysaur     142              10      true        2      130     ivysaur
+3   venusaur    236              20      true        3      1000    venusaur
+4   charmander  62               6       true        5      85      charmander
+...
+
+(20 results, Live, 1147ms, 21 http calls)
+```
+
+That is the point: the model asked for `Pokemon{}`; Plasm handled the index call plus hydration calls and returned a single table.
+
+The first column is the stable ref key for follow-up work. The runtime keeps the full entity ref (`AbilityScore("str")`, or for GitHub `Issue(owner="plasm", repo="plasm", number=42)`) even when the table only displays selected columns.
+
+That lets a later expression mutate or traverse by ref instead of rebuilding a raw API payload:
+
+```plasm
+e5(p304="plasm", p319="plasm", p297=42).m16(p47=123456)
+```
+
+Here the sub-issue mutation is declared as a side effect. The useful result is not a guessed JSON body; it is the fact that the issue graph changed in a typed way.
+
+Paging is built in. If a query mapping declares pagination, Plasm owns the continuation handle instead of making the model inspect `next`, `cursor`, `page`, or `Link` headers by hand:
+
+```plasm
+e5{p39=e17(p304="plasm", p319="plasm"), p42="open"}
+page(pg1)
+```
+
+The same normalization applies across catalogs in a federated session: refs remain typed, page handles remain runtime-owned, and projections stay attached to the entity that knows how to hydrate them.
+
+## Dynamic CLI
+
+The same CGS/CML catalog also compiles into a normal command-line interface. There is no handwritten GitHub CLI shim hiding underneath: entity names, path parameters, query filters, relation subcommands, write operations, enum validation, and pagination flags are generated from the schema.
+
+For a tiny public catalog:
+
+```bash
+cargo run -q -p plasm-agent --bin plasm-cgs -- \
+  --schema apis/dnd5e --backend https://www.dnd5eapi.co \
+  abilityscore --help
+```
+
+prints:
+
+```text
+Operations on AbilityScore resources
+
+Usage: plasm-cgs abilityscore [id] [COMMAND]
+
+Commands:
+  query   Query AbilityScore resources
+  skills  AbilityScore -> Skill (many)
+  help    Print this message or the help of the given subcommand(s)
+
+Arguments:
+  [id]  AbilityScore ID — get by ID, or follow with a subcommand
+```
+
+That is the same domain model as the Plasm prompt: `abilityscore str` is a get, `abilityscore query` is a collection query, and `abilityscore str skills` is relation traversal through the typed graph.
+
+On a larger catalog, the generated CLI stays structured instead of becoming a bag of flat RPC names. The GitHub issue surface now includes reads, relations, writes, and curated actions:
+
+```text
+Usage: plasm-cgs issue --owner <owner> --repo <repo> [id] [COMMAND]
+
+Commands:
+  search                  Search Issue by relevance
+  query                   issue_query (scoped query)
+  sub-issue-query         issue_sub_issue_query (scoped query)
+  user                    Issue -> User (one)
+  assignee                Issue -> User (one)
+  milestone               Issue -> Milestone (one)
+  issue-type              Issue -> IssueType (one)
+  labels                  Issue -> Label (many)
+  sub-issues              Issue -> Issue (many)
+  create                  Create a new Issue
+  update                  issue_update
+  delete                  Delete a Issue
+  sub-issue-add           issue_sub_issue_add
+  sub-issue-remove        issue_sub_issue_remove
+  sub-issue-reprioritize  issue_sub_issue_reprioritize
+  assignees-add           issue_assignees_add
+  assignees-remove        issue_assignees_remove
+  assign-copilot          issue_assign_copilot
+```
+
+Filters and pagination are typed too:
+
+```text
+Options:
+  --state <state>             [possible values: open, closed, all]
+  --sort <sort>               [possible values: created, updated, comments]
+  --direction <direction>     [possible values: asc, desc]
+  --limit <pagination_limit>  Maximum entities to return
+  --all                       Fetch all pages
+  --page <pagination_page>    Starting `page` query parameter
+```
+
+So the same authored API model gives an agent prompt, a REPL, an MCP surface, and a human-debuggable CLI. When a capability changes in `domain.yaml`, the prompt contract and CLI move together.
+
+## Authoring APIs with agents
+
+Adding a new API catalog is a semi-autonomous authoring process. Plasm does not treat OpenAPI as a correct-by-construction generator target; an agent still has to decide the domain model: which resources become entities, which endpoints collapse into one capability, which fields are refs, where pagination lives, and which operations are side effects.
+
+The repository includes local guidance for Cursor, Claude, Codex, and other coding agents:
+
+```text
+AGENTS.md
+CLAUDE.md
+.cursor/agents/plasm-api-mapping-designer.md
+.cursor/skills/plasm-authoring/SKILL.md
+.cursor/skills/plasm-authoring/reference.md
+```
+
+The intended loop is:
+
+```text
+read spec/docs -> design entity graph -> author domain.yaml -> author mappings.yaml
+-> compile/validate -> test against Hermit mocks -> add eval cases -> iterate
+```
+
+The compiler validates the authored model and transport templates:
+
+```bash
+cargo run -p plasm-cli -- schema validate apis/<api>/domain.yaml
+cargo run -p plasm-cli -- validate --schema apis/<api> --spec path/to/openapi.json
+```
+
+Hermit gives you a local mock server from the same OpenAPI spec, so the generated CLI can be exercised before live credentials or write endpoints are involved:
+
+```bash
+hermit --specs path/to/openapi.json --port 9090 --use-examples
+cargo run -p plasm-agent --bin plasm-cgs -- \
+  --schema apis/<api> --backend http://localhost:9090 <entity> query
+```
+
+Finally, `plasm-eval` checks model conformance: natural-language goals in `apis/<api>/eval/cases.yaml` must cover the expression forms and entities the catalog exposes.
+
+```bash
+cargo run -p plasm-eval -- coverage \
+  --schema apis/<api> --cases apis/<api>/eval/cases.yaml
+```
+
+That makes API authoring agent-friendly without pretending the semantic reduction from vendor RPCs to CGS is automatic.
+
 This repository contains the language/runtime pieces behind that layer:
 
 - **CGS** describes API domains as entities, relations, and capabilities.
@@ -43,45 +285,45 @@ This workspace ships `plasm-agent` and `plasm-mcp` for local use: HTTP discovery
 The `apis/` directory contains curated CGS/CML packages you can load directly with `--schema apis/<name>` or pack into plugin catalogs with `plasm-pack-plugins`.
 
 
-| API                                        | What it covers                                                                 |
-| ------------------------------------------ | ------------------------------------------------------------------------------ |
-| `[clickup](apis/clickup/)`                 | ClickUp workspaces, tasks, lists, and related project-management objects       |
-| `[discord](apis/discord/)`                 | Discord guild/channel/message style API surface                                |
-| `[dnd5e](apis/dnd5e/)`                     | D&D 5e SRD public API                                                          |
-| `[evm-erc20](apis/evm-erc20/)`             | EVM ERC-20 reads                                                               |
-| `[figma](apis/figma/)`                     | Figma API surface                                                              |
+| API                                        | What it covers                                                                                |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `[clickup](apis/clickup/)`                 | ClickUp workspaces, tasks, lists, and related project-management objects                      |
+| `[discord](apis/discord/)`                 | Discord guild/channel/message style API surface                                               |
+| `[dnd5e](apis/dnd5e/)`                     | D&D 5e SRD public API                                                                         |
+| `[evm-erc20](apis/evm-erc20/)`             | EVM ERC-20 reads                                                                              |
+| `[figma](apis/figma/)`                     | Figma API surface                                                                             |
 | `[github](apis/github/)`                   | GitHub repositories, issues, sub-issues, issue types, PRs, reviews, Actions, files, and users |
-| `[gitlab](apis/gitlab/)`                   | GitLab projects, issues, and merge requests                                    |
-| `[gmail](apis/gmail/)`                     | Gmail mailbox operations                                                       |
-| `[google-calendar](apis/google-calendar/)` | Google Calendar events and calendars                                           |
-| `[google-docs](apis/google-docs/)`         | Google Docs get/create/batch update operations                                 |
-| `[google-drive](apis/google-drive/)`       | Google Drive files, sharing, comments, drives, and changes                     |
-| `[google-sheets](apis/google-sheets/)`     | Google Sheets values, batches, and metadata                                    |
-| `[graphqlzero](apis/graphqlzero/)`         | GraphQLZero / JSONPlaceholder-style GraphQL                                    |
-| `[hackernews](apis/hackernews/)`           | Hacker News Firebase and Algolia search                                        |
-| `[jira](apis/jira/)`                       | Jira Cloud REST                                                                |
-| `[linkedin](apis/linkedin/)`               | LinkedIn profile and posting/query surfaces                                    |
-| `[linear](apis/linear/)`                   | Linear GraphQL issues and comments                                             |
-| `[microsoft-teams](apis/microsoft-teams/)` | Microsoft Teams via Microsoft Graph                                            |
-| `[musixmatch](apis/musixmatch/)`           | Musixmatch lyrics and related entities                                         |
-| `[notion](apis/notion/)`                   | Notion bearer-auth reads/search and database rows                              |
-| `[nytimes](apis/nytimes/)`                 | New York Times developer APIs                                                  |
-| `[omdb](apis/omdb/)`                       | OMDb movie data                                                                |
-| `[openbrewerydb](apis/openbrewerydb/)`     | Open Brewery DB                                                                |
-| `[openmeteo](apis/openmeteo/)`             | Open-Meteo weather                                                             |
-| `[outlook](apis/outlook/)`                 | Outlook mail folders, messages, and attachments                                |
-| `[pokeapi](apis/pokeapi/)`                 | PokéAPI full surface                                                           |
-| `[rawg](apis/rawg/)`                       | RAWG games                                                                     |
-| `[reddit](apis/reddit/)`                   | Reddit OAuth identity, subreddits, posts, comments, and search                 |
-| `[rickandmorty](apis/rickandmorty/)`       | Rick and Morty API                                                             |
-| `[slack](apis/slack/)`                     | Slack Web API                                                                  |
-| `[spotify](apis/spotify/)`                 | Spotify Web API                                                                |
-| `[tau2_retail](apis/tau2_retail/)`         | Tau2 retail test domain                                                        |
-| `[tavily](apis/tavily/)`                   | Tavily search, extract, and research                                           |
-| `[themealdb](apis/themealdb/)`             | TheMealDB                                                                      |
-| `[twitter](apis/twitter/)`                 | X API v2 posts, users, lists, and OAuth scope map                              |
-| `[vultr](apis/vultr/)`                     | Vultr public HTTP v2                                                           |
-| `[xkcd](apis/xkcd/)`                       | xkcd JSON API                                                                  |
+| `[gitlab](apis/gitlab/)`                   | GitLab projects, issues, and merge requests                                                   |
+| `[gmail](apis/gmail/)`                     | Gmail mailbox operations                                                                      |
+| `[google-calendar](apis/google-calendar/)` | Google Calendar events and calendars                                                          |
+| `[google-docs](apis/google-docs/)`         | Google Docs get/create/batch update operations                                                |
+| `[google-drive](apis/google-drive/)`       | Google Drive files, sharing, comments, drives, and changes                                    |
+| `[google-sheets](apis/google-sheets/)`     | Google Sheets values, batches, and metadata                                                   |
+| `[graphqlzero](apis/graphqlzero/)`         | GraphQLZero / JSONPlaceholder-style GraphQL                                                   |
+| `[hackernews](apis/hackernews/)`           | Hacker News Firebase and Algolia search                                                       |
+| `[jira](apis/jira/)`                       | Jira Cloud REST                                                                               |
+| `[linkedin](apis/linkedin/)`               | LinkedIn profile and posting/query surfaces                                                   |
+| `[linear](apis/linear/)`                   | Linear GraphQL issues and comments                                                            |
+| `[microsoft-teams](apis/microsoft-teams/)` | Microsoft Teams via Microsoft Graph                                                           |
+| `[musixmatch](apis/musixmatch/)`           | Musixmatch lyrics and related entities                                                        |
+| `[notion](apis/notion/)`                   | Notion bearer-auth reads/search and database rows                                             |
+| `[nytimes](apis/nytimes/)`                 | New York Times developer APIs                                                                 |
+| `[omdb](apis/omdb/)`                       | OMDb movie data                                                                               |
+| `[openbrewerydb](apis/openbrewerydb/)`     | Open Brewery DB                                                                               |
+| `[openmeteo](apis/openmeteo/)`             | Open-Meteo weather                                                                            |
+| `[outlook](apis/outlook/)`                 | Outlook mail folders, messages, and attachments                                               |
+| `[pokeapi](apis/pokeapi/)`                 | PokéAPI full surface                                                                          |
+| `[rawg](apis/rawg/)`                       | RAWG games                                                                                    |
+| `[reddit](apis/reddit/)`                   | Reddit OAuth identity, subreddits, posts, comments, and search                                |
+| `[rickandmorty](apis/rickandmorty/)`       | Rick and Morty API                                                                            |
+| `[slack](apis/slack/)`                     | Slack Web API                                                                                 |
+| `[spotify](apis/spotify/)`                 | Spotify Web API                                                                               |
+| `[tau2_retail](apis/tau2_retail/)`         | Tau2 retail test domain                                                                       |
+| `[tavily](apis/tavily/)`                   | Tavily search, extract, and research                                                          |
+| `[themealdb](apis/themealdb/)`             | TheMealDB                                                                                     |
+| `[twitter](apis/twitter/)`                 | X API v2 posts, users, lists, and OAuth scope map                                             |
+| `[vultr](apis/vultr/)`                     | Vultr public HTTP v2                                                                          |
+| `[xkcd](apis/xkcd/)`                       | xkcd JSON API                                                                                 |
 
 
 ## Prerequisites
@@ -118,7 +360,7 @@ If this repository is checked out as the `plasm-oss/` subdirectory of the full P
 
 **Default:** put values in a `**.env`** file at the workspace root (or a parent—`[dotenv_safe](crates/plasm-agent-core/src/dotenv_safe.rs)` walks up and merges) or `export` them in your shell. `plasm_agent::init_agent_runtime` loads dotenv on startup (see [lib.rs](crates/plasm-agent/src/lib.rs)).
 
-- **Outbound API calls** (Vultr, Spotify, etc.) use CGS `auth: …` with `**env:`** and OAuth `**client_*_env`** in `[apis/](apis)*`—that reads `**std::env**` (including from `.env`). Avoid `hosted_kv` in local development here; that path targets platform KV in the hosted product.
+- **Outbound API calls** (Vultr, Spotify, etc.) use CGS `auth: …` with `**env:`** and OAuth `**client_*_env`** in `[apis/](apis)*`—that reads `**std::env`** (including from `.env`). Avoid `hosted_kv` in local development here; that path targets platform KV in the hosted product.
 - `**plasm-mcp` from this workspace** does **not** start `auth-framework`, does not require `PLASM_AUTH_JWT_SECRET`, and runs Streamable HTTP MCP **without** API-key or OAuth **transport** auth. Use `**plasm-mcp-app`** in the monorepo for tenant-scoped MCP, API keys, and control-plane features.
 - **Operations / Kubernetes** may still use `PLASM_SECRETS_DIR` and the bootstrap materializer in `[bootstrap_secrets](crates/plasm-agent-core/src/bootstrap_secrets.rs)` for the **product** image—see deploy docs in the private repo—not the default path for day-to-day work in this tree.
 
