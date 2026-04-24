@@ -147,6 +147,48 @@ e5(p304="plasm", p319="plasm", p297=42).m16(p47=123456)
 
 Here the sub-issue mutation is declared as a side effect. The useful result is not a guessed JSON body; it is the fact that the issue graph changed in a typed way.
 
+For markdown, HTML, document, JSON-text, or blob-like inputs, Plasm uses tagged heredocs instead of asking the model to escape a large string. For example, the GitHub issue-comment capability has a markdown body slot, so the expression can carry multiline markdown directly:
+
+````plasm
+e6.m21(p10=e17(p304="plasm", p319="plasm"), p9=42, p8=<<MD
+## Triage note
+
+- reproduced on main
+- needs a regression test
+
+```rust
+fn smoke() {}
+```
+MD
+)
+````
+
+The delimiter (`MD` here) is chosen by the model, and the body is passed as the value for that one typed markdown parameter. No JSON string escaping or ad hoc newline convention is required. Tagged heredocs are also already familiar to base models because the same pattern is ubiquitous in bash, shell scripts, CI config, and ops docs.
+
+In standard MCP / JSON-schema tools, the same payload sits inside a JSON argument object. The MCP spec's `tools/call` request is shaped like `{"params":{"name":"...","arguments":{...}}}`, and each tool advertises an `inputSchema` as JSON Schema. JSON then imposes its own string rules: RFC 8259 says quotation marks, backslashes, and control characters like raw newlines must be escaped.
+
+So the equivalent tool call becomes something closer to:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "create_issue_comment",
+    "arguments": {
+      "owner": "plasm",
+      "repo": "plasm",
+      "issue_number": 42,
+      "body": "## Triage note\n\n- reproduced on main\n- needs a regression test\n\n```rust\nfn smoke() {}\n```"
+    }
+  }
+}
+```
+
+That is valid JSON, but it is also a bad surface for models and humans: the markdown is no longer markdown-shaped, every newline is an escape sequence, embedded code fences live inside a quoted string, and another layer of shell or SDK serialization can double-encode the whole thing. This is not hypothetical; public MCP/agent bug reports include JSON arguments being treated as literal strings, JSON arguments being double-encoded into a string key, Windows shell quoting breaking JSON parsing, and OpenAI-style function-call argument strings being parsed twice and corrupting escape sequences.
+
+### Paging and Archive Refs
+
 Paging is built in. If a query mapping declares pagination, Plasm owns the continuation handle instead of making the model inspect `next`, `cursor`, `page`, or `Link` headers by hand:
 
 ```plasm
@@ -154,7 +196,9 @@ e5{p39=e17(p304="plasm", p319="plasm"), p42="open"}
 page(pg1)
 ```
 
-The same normalization applies across catalogs in a federated session: refs remain typed, page handles remain runtime-owned, and projections stay attached to the entity that knows how to hydrate them.
+Large or lossy-presented results get the same treatment. Instead of stuffing every long field into the chat turn, Plasm can return resource refs for run snapshots: canonical `plasm://execute/{prompt_hash}/{session_id}/run/{run_id}` URIs and short `plasm://r/{n}` or `plasm://session/{sN}/r/{n}` handles for MCP `resources/read`. Trace records carry a stable `RunArtifactArchiveRef` (`prompt_hash`, `session_id`, `run_id`, optional `resource_index`) so the full archived result can be fetched later even when the table says `(in artifact)`.
+
+The same normalization applies across catalogs in a federated session: refs remain typed, page handles remain runtime-owned, archive refs point to complete run snapshots, and projections stay attached to the entity that knows how to hydrate them.
 
 ## Dynamic CLI
 
