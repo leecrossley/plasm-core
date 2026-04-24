@@ -4,6 +4,7 @@ members = [
     "crates/plasm-cml",
     "crates/plasm-compile",
     "crates/plasm-runtime",
+    "crates/plasm-observability-contracts",
     "crates/plasm-trace",
     "crates/plasm-mock",
     "crates/plasm-cli",

@@ -5,6 +5,7 @@ edition = "2021"
 description = "Canonical MCP / execute session trace segments, events, and totals"
 
 [dependencies]
+plasm-observability-contracts = { path = "../plasm-observability-contracts" }
 plasm-runtime = { path = "../plasm-runtime" }
 serde = { workspace = true }
 serde_json = { workspace = true }

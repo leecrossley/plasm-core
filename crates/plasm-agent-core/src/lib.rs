@@ -21,6 +21,7 @@ pub mod http_execute;
 pub mod http_incoming_context;
 pub mod http_problem_util;
 mod http_traces;
+pub mod local_trace_archive;
 pub mod incoming_auth;
 pub mod input_field_cli;
 pub mod invoke_args;

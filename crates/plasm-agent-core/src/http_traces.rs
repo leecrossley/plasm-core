@@ -1,6 +1,6 @@
 //! `GET /v1/traces` (list), `GET /v1/traces/:trace_id` (detail), `GET /v1/traces/:trace_id/stream` (SSE patches).
 //!
-//! **Durable reads** (tenant-scoped list/detail) go to [`plasm_trace_sink`] via `PLASM_TRACE_SINK_READ_URL` /
+//! **Durable reads** (tenant-scoped list/detail) go to the Plasm trace sink service via `PLASM_TRACE_SINK_READ_URL` /
 //! `PLASM_TRACE_SINK_URL`. There is **no** fallback to the in-memory [`crate::trace_hub`] when that HTTP
 //! call fails — the handler returns **503** (`application/problem+json`) so clients do not misread outages
 //! as an empty history.
@@ -26,8 +26,8 @@ use uuid::Uuid;
 use crate::http_problem_util::{problem_response, problem_types};
 use crate::incoming_auth::IncomingPrincipal;
 use crate::server_state::PlasmHostState;
-use crate::trace_hub::{TraceListStatus, TraceSummaryDto};
-use plasm_trace_sink::model::{
+use crate::trace_hub::{TraceDetailDto, TraceListStatus, TraceSummaryDto};
+use plasm_observability_contracts::{
     TraceDetailResponse as SinkTraceDetailResponse, TraceListResponse as SinkTraceListResponse,
 };
 use tracing::Instrument;
@@ -64,7 +64,7 @@ fn problem_trace_sink_not_configured() -> Problem {
     )
     .with_title("Trace sink not configured")
     .with_detail(
-        "Set PLASM_TRACE_SINK_READ_URL or PLASM_TRACE_SINK_URL for durable trace reads (no in-memory fallback).",
+        "Set PLASM_TRACE_SINK_READ_URL, PLASM_TRACE_SINK_URL (remote), or PLASM_TRACE_ARCHIVE_DIR (local OSS) for durable trace reads; hub-only history is not exposed as tenant history without one of these.",
     )
 }
 
@@ -83,37 +83,61 @@ async fn list_traces(
     Query(q): Query<TraceListQuery>,
 ) -> Result<Json<TraceListResponse>, Response> {
     if let Some(tenant) = viewer_tenant(&principal) {
-        let Some(base) = st.trace_sink_read_base_url.as_deref() else {
+        if let Some(base) = st.trace_sink_read_base_url.as_deref() {
+            let merged_limit = q.offset.saturating_add(q.limit);
+            let list_span = crate::spans::billing_trace_list(tenant, q.limit, q.offset);
+            match list_traces_from_sink(
+                base,
+                tenant,
+                q.project_slug.as_deref(),
+                q.status.as_deref(),
+                0,
+                merged_limit,
+            )
+            .instrument(list_span)
+            .await
+            {
+                Ok(traces) => return Ok(Json(TraceListResponse { traces })),
+                Err(detail) => {
+                    tracing::warn!(
+                        target: "plasm_agent::http_traces",
+                        tenant,
+                        error = %detail,
+                        "GET /v1/traces: trace sink read failed",
+                    );
+                    return Err(problem_response(problem_trace_sink_unavailable(detail)));
+                }
+            }
+        } else if let Some(arch) = st.local_trace_archive.as_ref() {
+            let st_q = TraceListStatus::parse(q.status.as_deref());
+            match arch
+                .list_for_tenant(
+                    tenant,
+                    q.project_slug.as_deref(),
+                    q.offset,
+                    q.limit,
+                    st_q,
+                )
+                .await
+            {
+                Ok(traces) => return Ok(Json(TraceListResponse { traces })),
+                Err(e) => {
+                    tracing::warn!(
+                        target: "plasm_agent::http_traces",
+                        tenant,
+                        error = %e,
+                        "GET /v1/traces: local trace archive list failed",
+                    );
+                    return Err(problem_response(problem_trace_sink_unavailable(e.to_string())));
+                }
+            }
+        } else {
             tracing::warn!(
                 target: "plasm_agent::http_traces",
                 tenant,
-                "GET /v1/traces: trace sink read URL not configured",
+                "GET /v1/traces: no durable trace backend (set PLASM_TRACE_SINK_READ_URL, PLASM_TRACE_SINK_URL, or PLASM_TRACE_ARCHIVE_DIR)",
             );
             return Err(problem_response(problem_trace_sink_not_configured()));
-        };
-        let merged_limit = q.offset.saturating_add(q.limit);
-        let list_span = crate::spans::billing_trace_list(tenant, q.limit, q.offset);
-        match list_traces_from_sink(
-            base,
-            tenant,
-            q.project_slug.as_deref(),
-            q.status.as_deref(),
-            0,
-            merged_limit,
-        )
-        .instrument(list_span)
-        .await
-        {
-            Ok(traces) => return Ok(Json(TraceListResponse { traces })),
-            Err(detail) => {
-                tracing::warn!(
-                    target: "plasm_agent::http_traces",
-                    tenant,
-                    error = %detail,
-                    "GET /v1/traces: trace sink read failed",
-                );
-                return Err(problem_response(problem_trace_sink_unavailable(detail)));
-            }
         }
     }
 
@@ -134,12 +158,10 @@ async fn get_trace_detail(
     Extension(st): Extension<PlasmHostState>,
     Extension(principal): Extension<IncomingPrincipal>,
     Path(trace_id): Path<Uuid>,
-) -> Result<Json<crate::trace_hub::TraceDetailDto>, Response> {
+) -> Result<Json<TraceDetailDto>, Response> {
     let viewer = viewer_tenant(&principal);
-    if let Some(live) = st.trace_hub.get_detail(trace_id, viewer).await {
-        if live.summary.status == "live" {
-            return Ok(Json(live));
-        }
+    if let Some(detail) = st.trace_hub.get_detail(trace_id, viewer).await {
+        return Ok(Json(detail));
     }
 
     let Some(tenant) = viewer else {
@@ -149,34 +171,49 @@ async fn get_trace_detail(
         };
     };
 
-    let Some(base) = st.trace_sink_read_base_url.as_deref() else {
-        tracing::warn!(
-            target: "plasm_agent::http_traces",
-            tenant,
-            %trace_id,
-            "GET /v1/traces/:id: trace sink read URL not configured",
-        );
-        return Err(problem_response(problem_trace_sink_not_configured()));
-    };
-
-    let detail_span = crate::spans::billing_trace_detail(tenant, &trace_id);
-    match fetch_trace_detail_from_sink(base, tenant, trace_id)
-        .instrument(detail_span)
-        .await
-    {
-        Ok(Some(detail)) => Ok(Json(detail)),
-        Ok(None) => Err(StatusCode::NOT_FOUND.into_response()),
-        Err(detail) => {
-            tracing::warn!(
-                target: "plasm_agent::http_traces",
-                tenant,
-                %trace_id,
-                error = %detail,
-                "GET /v1/traces/:id: trace sink read failed",
-            );
-            Err(problem_response(problem_trace_sink_unavailable(detail)))
+    if let Some(base) = st.trace_sink_read_base_url.as_deref() {
+        let detail_span = crate::spans::billing_trace_detail(tenant, &trace_id);
+        match fetch_trace_detail_from_sink(base, tenant, trace_id)
+            .instrument(detail_span)
+            .await
+        {
+            Ok(Some(detail)) => return Ok(Json(detail)),
+            Ok(None) => {}
+            Err(detail) => {
+                tracing::warn!(
+                    target: "plasm_agent::http_traces",
+                    tenant,
+                    %trace_id,
+                    error = %detail,
+                    "GET /v1/traces/:id: trace sink read failed",
+                );
+                return Err(problem_response(problem_trace_sink_unavailable(detail)));
+            }
         }
     }
+    if let Some(arch) = st.local_trace_archive.as_ref() {
+        match arch.get_detail(tenant, trace_id).await {
+            Ok(Some(d)) => return Ok(Json(d)),
+            Ok(None) => return Err(StatusCode::NOT_FOUND.into_response()),
+            Err(e) => {
+                tracing::warn!(
+                    target: "plasm_agent::http_traces",
+                    tenant,
+                    %trace_id,
+                    error = %e,
+                    "GET /v1/traces/:id: local trace archive read failed",
+                );
+                return Err(problem_response(problem_trace_sink_unavailable(e.to_string())));
+            }
+        }
+    }
+    tracing::warn!(
+        target: "plasm_agent::http_traces",
+        tenant,
+        %trace_id,
+        "GET /v1/traces/:id: no durable trace read backend configured",
+    );
+    Err(problem_response(problem_trace_sink_not_configured()))
 }
 
 fn sse_event_name_for_trace_payload(json: &str) -> &'static str {
@@ -372,7 +409,9 @@ fn hub_status_from_sink(status: &str) -> &'static str {
     }
 }
 
-fn hub_totals_from_sink(t: &plasm_trace_sink::model::TraceTotals) -> crate::trace_hub::TraceTotals {
+fn hub_totals_from_sink(
+    t: &plasm_observability_contracts::TraceTotals,
+) -> crate::trace_hub::TraceTotals {
     crate::trace_hub::TraceTotals {
         plasm_tool_calls: t.plasm_tool_calls,
         plasm_expressions: t.plasm_expressions,

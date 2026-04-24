@@ -1,8 +1,7 @@
-//! Compatibility library crate: re-exports [`plasm_agent_core`] and wires the `plasm-mcp` entrypoint.
+//! Re-exports [`plasm_agent_core`] and the OSS `plasm-mcp` entrypoint.
 //!
-//! Most functionality lives in `plasm-agent-core` (open-source host) and `plasm-saas` (private
-//! control-plane surface). This crate exists so downstream tools can keep depending on the
-//! `plasm_agent` name and the existing binary commands.
+//! Data-plane behavior lives in `plasm-agent-core`. The private monorepo composes `plasm-saas` and
+//! `plasm-mcp-app` for the full hosted control plane; this crate stays the open-source surface.
 
 pub use plasm_agent_core::*;
 

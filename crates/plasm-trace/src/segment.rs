@@ -1,9 +1,9 @@
 //! One append-only trace segment (tool / domain / expression row).
 
+use plasm_observability_contracts::RunArtifactArchiveRef;
 use plasm_runtime::http_trace::HttpTraceEntry;
 use plasm_runtime::{ExecutionSource, ExecutionStats};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// Source + REPL display strings recorded with each executed line trace.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -14,18 +14,6 @@ pub struct PlasmLineTraceMeta {
     pub capability: Option<String>,
     pub operation: String,
     pub api_entry_id: Option<String>,
-}
-
-/// Stable archive identity for an execute run snapshot (HTTP artifacts + MCP `resources/read`).
-/// Aligns with `RunArtifactDocument` (`run_id`, `prompt_hash`, `session_id`, optional `resource_index`) for durable storage and future web deep-links.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RunArtifactArchiveRef {
-    pub prompt_hash: String,
-    pub session_id: String,
-    pub run_id: Uuid,
-    /// Present when the client read via short `plasm://session/.../r/{n}` (monotonic index).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource_index: Option<u64>,
 }
 
 fn is_false(b: &bool) -> bool {

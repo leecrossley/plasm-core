@@ -9,7 +9,7 @@ use std::sync::{Once, OnceLock};
 use std::time::{Duration, Instant};
 
 use plasm_trace::{TraceEvent, TraceSegment};
-use plasm_trace_sink::model::{
+use plasm_observability_contracts::{
     AuditEvent, IngestBatchRequest, AUDIT_EVENT_KIND_MCP_TRACE_SEGMENT, SCHEMA_VERSION,
 };
 use tokio::sync::Semaphore;

@@ -2,8 +2,15 @@
 //!
 //! Storage backends:
 //! - **In-memory** (default): [`RunArtifactStore::memory`].
-//! - **Object store** (optional): set **`PLASM_RUN_ARTIFACTS_URL`** to an [`object_store`] URL (e.g. `s3://bucket/prefix`, `file:///path/to/dir`).
-//!   Time-based GC deletes objects older than **`PLASM_RUN_ARTIFACTS_RETENTION_SECS`** using each object’s **`last_modified`** (objects without it are left in place).
+//! - **Local directory** (OSS/self-host): set **`PLASM_RUN_ARTIFACTS_DIR`**; stores blobs and short-URI
+//!   index files under a stable layout (see `FsRunArtifactBackend`).
+//! - **Object store** (hosted/SaaS): set **`PLASM_RUN_ARTIFACTS_URL`** to an [`object_store`] URL (e.g.
+//!   `s3://bucket/prefix`, `file:///path/to/dir` as advanced use).  
+//!   **Precedence:** if **`PLASM_RUN_ARTIFACTS_URL`** is set, the object store backend is used and
+//!   `PLASM_RUN_ARTIFACTS_DIR` is **ignored** for selection. If only `PLASM_RUN_ARTIFACTS_DIR` is set, the
+//!   local filesystem backend is used. If neither is set, in-memory.
+//!   Time-based GC (object store only) uses **`PLASM_RUN_ARTIFACTS_RETENTION_SECS`** and
+//!   **`PLASM_RUN_ARTIFACTS_GC_INTERVAL_SECS`**.
 
 use async_trait::async_trait;
 use axum::body::Bytes;
@@ -12,6 +19,7 @@ use object_store::{path::Path as StorePath, ObjectStore, ObjectStoreExt};
 use plasm_runtime::{ExecutionResult, ExecutionSource, ExecutionStats};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::MissedTickBehavior;
@@ -85,6 +93,8 @@ pub enum RunArtifactError {
     Decode(String),
     #[error("run artifact object store: {0}")]
     ObjectStore(String),
+    #[error("run artifact filesystem: {0}")]
+    Filesystem(String),
 }
 
 #[async_trait]
@@ -322,6 +332,124 @@ impl RunArtifactBackend for MemoryRunArtifactBackend {
     }
 }
 
+/// Local filesystem run artifacts: `execute/{prompt_hash}/{session_id}/{run_id}.artifact` and
+/// `execute/.../resource-index/{n}.txt` (UUID text) for `plasm://r/{n}` resolution.
+#[derive(Debug, Clone)]
+struct FsRunArtifactBackend {
+    root: PathBuf,
+}
+
+fn run_artifact_fs_segment(s: &str) -> Result<&str, RunArtifactError> {
+    if s.is_empty() || s.contains("..") || s.contains('/') || s.contains('\\') {
+        return Err(RunArtifactError::Filesystem(format!(
+            "invalid path segment in run artifact key: {s:?}"
+        )));
+    }
+    Ok(s)
+}
+
+impl FsRunArtifactBackend {
+    fn blob_path(
+        &self,
+        prompt_hash: &str,
+        session_id: &str,
+        run_id: Uuid,
+    ) -> Result<PathBuf, RunArtifactError> {
+        let ph = run_artifact_fs_segment(prompt_hash)?;
+        let sid = run_artifact_fs_segment(session_id)?;
+        Ok(self
+            .root
+            .join("execute")
+            .join(ph)
+            .join(sid)
+            .join(format!("{run_id}.artifact")))
+    }
+
+    fn resource_index_path(
+        &self,
+        prompt_hash: &str,
+        session_id: &str,
+        resource_index: u64,
+    ) -> Result<PathBuf, RunArtifactError> {
+        let ph = run_artifact_fs_segment(prompt_hash)?;
+        let sid = run_artifact_fs_segment(session_id)?;
+        Ok(self
+            .root
+            .join("execute")
+            .join(ph)
+            .join(sid)
+            .join("resource-index")
+            .join(format!("{resource_index}.txt")))
+    }
+}
+
+#[async_trait]
+impl RunArtifactBackend for FsRunArtifactBackend {
+    async fn insert_encoded(
+        &self,
+        prompt_hash: &str,
+        session_id: &str,
+        run_id: Uuid,
+        encoded: Vec<u8>,
+    ) -> Result<usize, RunArtifactError> {
+        let n = encoded.len();
+        let path = self.blob_path(prompt_hash, session_id, run_id)?;
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| RunArtifactError::Filesystem(e.to_string()))?;
+        }
+        tokio::fs::write(&path, encoded)
+            .await
+            .map_err(|e| RunArtifactError::Filesystem(e.to_string()))?;
+        Ok(n)
+    }
+
+    async fn get_encoded(
+        &self,
+        prompt_hash: &str,
+        session_id: &str,
+        run_id: Uuid,
+    ) -> Option<Vec<u8>> {
+        let path = self.blob_path(prompt_hash, session_id, run_id).ok()?;
+        tokio::fs::read(&path).await.ok()
+    }
+
+    async fn put_run_id_for_resource_index(
+        &self,
+        prompt_hash: &str,
+        session_id: &str,
+        resource_index: u64,
+        run_id: Uuid,
+    ) -> Result<(), RunArtifactError> {
+        let path = self.resource_index_path(prompt_hash, session_id, resource_index)?;
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| RunArtifactError::Filesystem(e.to_string()))?;
+        }
+        let body = run_id.as_hyphenated().to_string();
+        tokio::fs::write(&path, body)
+            .await
+            .map_err(|e| RunArtifactError::Filesystem(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn get_run_id_for_resource_index(
+        &self,
+        prompt_hash: &str,
+        session_id: &str,
+        resource_index: u64,
+    ) -> Option<Uuid> {
+        let path = self
+            .resource_index_path(prompt_hash, session_id, resource_index)
+            .ok()?;
+        let bytes = tokio::fs::read(&path).await.ok()?;
+        let s = std::str::from_utf8(&bytes).ok()?;
+        Uuid::parse_str(s.trim()).ok()
+    }
+}
+
 struct ObjectStoreRunArtifactBackend {
     store: Arc<dyn ObjectStore>,
     prefix: StorePath,
@@ -448,40 +576,61 @@ fn decode_payload(encoded: &[u8]) -> Result<ArtifactPayload, RunArtifactError> {
     Ok(ArtifactPayload { metadata, bytes })
 }
 
-/// Build [`RunArtifactStore`] from environment, or in-memory when **`PLASM_RUN_ARTIFACTS_URL`** is unset.
+/// Build [`RunArtifactStore`] from environment: **object store** (`PLASM_RUN_ARTIFACTS_URL`) if set,
+/// else **local directory** (`PLASM_RUN_ARTIFACTS_DIR`) if set, else **in-memory** (see module docs for precedence).
 ///
-/// - **`PLASM_RUN_ARTIFACTS_URL`**: [`object_store::parse_url_opts`] URL (credentials via standard env for each cloud).
-/// - **`PLASM_RUN_ARTIFACTS_RETENTION_SECS`**: delete objects with `last_modified` older than this (default **604800** = 7 days).
-/// - **`PLASM_RUN_ARTIFACTS_GC_INTERVAL_SECS`**: background GC period (default **300**).
+/// - **`PLASM_RUN_ARTIFACTS_URL`**: [`object_store::parse_url_opts`] (hosted / multi-replica; wins over `PLASM_RUN_ARTIFACTS_DIR` when set).
+/// - **`PLASM_RUN_ARTIFACTS_DIR`**: local directory root (OSS/self-host durable tier when URL unset).
+/// - **`PLASM_RUN_ARTIFACTS_RETENTION_SECS`** / **`PLASM_RUN_ARTIFACTS_GC_INTERVAL_SECS`**: only apply to the object store backend.
 pub fn init_from_env() -> Result<Arc<RunArtifactStore>, String> {
-    let url_raw = match std::env::var("PLASM_RUN_ARTIFACTS_URL") {
-        Ok(s) if !s.trim().is_empty() => s,
-        _ => {
-            tracing::warn!(
-                target: "plasm_agent::run_artifacts",
-                "PLASM_RUN_ARTIFACTS_URL unset: using in-process memory for execute run snapshots (not suitable for production horizontal scale; set PLASM_RUN_ARTIFACTS_URL to an object-store URL)"
+    if let Ok(url_raw) = std::env::var("PLASM_RUN_ARTIFACTS_URL") {
+        if !url_raw.trim().is_empty() {
+            let url = url::Url::parse(&url_raw)
+                .map_err(|e| format!("PLASM_RUN_ARTIFACTS_URL is not a valid URL: {e}"))?;
+            let (boxed, prefix) = object_store::parse_url_opts(&url, std::env::vars())
+                .map_err(|e| format!("PLASM_RUN_ARTIFACTS_URL could not open object store: {e}"))?;
+            let store: Arc<dyn ObjectStore> = Arc::from(boxed);
+            let retention = retention_from_env();
+            let interval = gc_interval_from_env();
+            let backend = Arc::new(ObjectStoreRunArtifactBackend {
+                store: store.clone(),
+                prefix: prefix.clone(),
+            });
+            spawn_run_artifact_gc_task(store, prefix, retention, interval);
+            tracing::info!(
+                retention_secs = retention.as_secs(),
+                gc_interval_secs = interval.as_secs(),
+                "run artifacts: object store backend (time-based GC)"
             );
-            return Ok(Arc::new(RunArtifactStore::memory()));
+            return Ok(Arc::new(RunArtifactStore { inner: backend }));
         }
-    };
-    let url = url::Url::parse(&url_raw)
-        .map_err(|e| format!("PLASM_RUN_ARTIFACTS_URL is not a valid URL: {e}"))?;
-    let (boxed, prefix) = object_store::parse_url_opts(&url, std::env::vars())
-        .map_err(|e| format!("PLASM_RUN_ARTIFACTS_URL could not open object store: {e}"))?;
-    let store: Arc<dyn ObjectStore> = Arc::from(boxed);
-    let retention = retention_from_env();
-    let interval = gc_interval_from_env();
-    let backend = Arc::new(ObjectStoreRunArtifactBackend {
-        store: store.clone(),
-        prefix: prefix.clone(),
-    });
-    spawn_run_artifact_gc_task(store, prefix, retention, interval);
-    tracing::info!(
-        retention_secs = retention.as_secs(),
-        gc_interval_secs = interval.as_secs(),
-        "run artifacts: object store backend (time-based GC)"
+    }
+    if let Ok(dir) = std::env::var("PLASM_RUN_ARTIFACTS_DIR") {
+        if !dir.trim().is_empty() {
+            let root: PathBuf = dir.trim().to_string().into();
+            if let Err(e) = std::fs::create_dir_all(&root) {
+                return Err(format!("PLASM_RUN_ARTIFACTS_DIR: could not create {root:?}: {e}"));
+            }
+            tracing::info!(path = %root.display(), "run artifacts: local filesystem backend");
+            return Ok(Arc::new(RunArtifactStore {
+                inner: Arc::new(FsRunArtifactBackend { root }),
+            }));
+        }
+    }
+    tracing::warn!(
+        target: "plasm_agent::run_artifacts",
+        "PLASM_RUN_ARTIFACTS_URL and PLASM_RUN_ARTIFACTS_DIR unset: using in-process memory for execute run snapshots; set an object store URL, or PLASM_RUN_ARTIFACTS_DIR for local OSS durable refs"
     );
-    Ok(Arc::new(RunArtifactStore { inner: backend }))
+    Ok(Arc::new(RunArtifactStore::memory()))
+}
+
+#[cfg(test)]
+impl RunArtifactStore {
+    fn from_fs_root_for_test(root: PathBuf) -> Self {
+        Self {
+            inner: Arc::new(FsRunArtifactBackend { root }),
+        }
+    }
 }
 
 fn retention_from_env() -> Duration {
@@ -659,6 +808,30 @@ pub fn document_from_run(d: DocumentFromRun<'_>) -> RunArtifactDocument {
 mod tests {
     use super::*;
 
+    use std::sync::Mutex;
+
+    /// `init_from_env` reads process env; serialize tests that mutate it.
+    static PLASM_RUN_ARTIFACTS_ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Restores `PLASM_RUN_ARTIFACTS_{URL,DIR}` after test (even on panic).
+    struct RestorePlasmRunArtifactEnv {
+        had_url: Option<String>,
+        had_dir: Option<String>,
+    }
+
+    impl Drop for RestorePlasmRunArtifactEnv {
+        fn drop(&mut self) {
+            match &self.had_url {
+                Some(s) => std::env::set_var("PLASM_RUN_ARTIFACTS_URL", s),
+                None => std::env::remove_var("PLASM_RUN_ARTIFACTS_URL"),
+            }
+            match &self.had_dir {
+                Some(s) => std::env::set_var("PLASM_RUN_ARTIFACTS_DIR", s),
+                None => std::env::remove_var("PLASM_RUN_ARTIFACTS_DIR"),
+            }
+        }
+    }
+
     #[test]
     fn parse_plasm_run_uri_round_trip() {
         let id = Uuid::nil();
@@ -756,5 +929,104 @@ mod tests {
         );
         assert!(parse_plasm_session_short_resource_uri("plasm://session/not-uuid/r/1").is_none());
         assert!(parse_plasm_session_short_resource_uri("plasm://session/s/r/1").is_none());
+    }
+
+    #[tokio::test]
+    async fn fs_backend_resource_index_round_trip() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let store = RunArtifactStore::from_fs_root_for_test(tmp.path().to_path_buf());
+        let ph = "p".repeat(64);
+        let run_id = Uuid::new_v4();
+        let doc = RunArtifactDocument {
+            run_id: run_id.to_string(),
+            prompt_hash: ph.clone(),
+            session_id: "s1".into(),
+            entry_id: "e".into(),
+            resource_index: Some(3),
+            principal: None,
+            expressions: vec![],
+            request_fingerprints: vec![],
+            entities: vec![],
+            source: ExecutionSource::Live,
+            stats: ExecutionStats {
+                duration_ms: 0,
+                network_requests: 0,
+                cache_hits: 0,
+                cache_misses: 0,
+            },
+        };
+        store
+            .insert(&ph, "s1", run_id, &doc)
+            .await
+            .expect("insert");
+        let by_idx = store
+            .get_payload_result_by_resource_index(&ph, "s1", 3)
+            .await
+            .expect("by index")
+            .expect("some");
+        let v: serde_json::Value = serde_json::from_slice(&by_idx.bytes).expect("json");
+        assert_eq!(v["run_id"], run_id.to_string());
+    }
+
+    /// `PLASM_RUN_ARTIFACTS_URL` must win over `PLASM_RUN_ARTIFACTS_DIR` (hosted/SaaS invariant).
+    #[tokio::test]
+    async fn init_from_env_url_precedes_dir() {
+        let _lock = PLASM_RUN_ARTIFACTS_ENV_TEST_LOCK
+            .lock()
+            .expect("env test lock");
+        let _restore = RestorePlasmRunArtifactEnv {
+            had_url: std::env::var("PLASM_RUN_ARTIFACTS_URL").ok(),
+            had_dir: std::env::var("PLASM_RUN_ARTIFACTS_DIR").ok(),
+        };
+        std::env::remove_var("PLASM_RUN_ARTIFACTS_URL");
+        std::env::remove_var("PLASM_RUN_ARTIFACTS_DIR");
+
+        let object_root = tempfile::tempdir().expect("url root");
+        let decoy_fs_root = tempfile::tempdir().expect("decoy dir — must not be used for blobs");
+
+        let file_url = url::Url::from_directory_path(object_root.path())
+            .expect("file: URL for run artifact prefix")
+            .to_string();
+        std::env::set_var("PLASM_RUN_ARTIFACTS_URL", &file_url);
+        std::env::set_var(
+            "PLASM_RUN_ARTIFACTS_DIR",
+            decoy_fs_root.path().to_string_lossy().as_ref(),
+        );
+
+        let store: Arc<RunArtifactStore> = init_from_env().expect("init_from_env");
+
+        let ph = "c".repeat(64);
+        let run_id = Uuid::new_v4();
+        let doc = RunArtifactDocument {
+            run_id: run_id.to_string(),
+            prompt_hash: ph.clone(),
+            session_id: "sess".into(),
+            entry_id: "e".into(),
+            resource_index: None,
+            principal: None,
+            expressions: vec![],
+            request_fingerprints: vec![],
+            entities: vec![],
+            source: ExecutionSource::Live,
+            stats: ExecutionStats {
+                duration_ms: 0,
+                network_requests: 0,
+                cache_hits: 0,
+                cache_misses: 0,
+            },
+        };
+        store
+            .insert(&ph, "sess", run_id, &doc)
+            .await
+            .expect("insert with object store backend");
+
+        assert!(
+            !decoy_fs_root.path().join("execute").exists(),
+            "If PLASM_RUN_ARTIFACTS_DIR were selected, execute/ would appear under the decoy path"
+        );
+        assert!(
+            object_root.path().join("execute").exists(),
+            "Object-store backend (file: URL) should place blobs under the URL path + execute/"
+        );
     }
 }

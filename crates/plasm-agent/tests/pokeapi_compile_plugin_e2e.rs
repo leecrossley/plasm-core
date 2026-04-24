@@ -9,19 +9,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use plasm_agent::auth_framework_host;
 use plasm_agent::http::{build_plasm_host_state, discovery_execute_router, PlasmHostBootstrap};
-use plasm_agent::oauth_link_catalog::OauthLinkCatalog;
-use plasm_agent::outbound_secret_provider::AgentOutboundSecretProvider;
 use plasm_agent::server_state::CatalogBootstrap;
-use plasm_agent::server_state::PlasmSaaSHostExtension;
 use plasm_core::discovery::InMemoryCgsRegistry;
 use plasm_core::loader::load_schema;
 use plasm_plugin_host::PluginManager;
-use plasm_runtime::{ExecutionConfig, ExecutionEngine, ExecutionMode, SecretProvider};
-
-const JWT_TEST_SECRET: &str =
-    "nM8kQ2wE5rT7yU1iO3pA6sD9fG4hJ0zXvC2bN5mL8qW6eR3tY7uI1oP4aS9dF2gH5jK0lZxVnBqMw";
+use plasm_runtime::{ExecutionConfig, ExecutionEngine, ExecutionMode};
 
 fn stub_dylib_path() -> std::path::PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -46,8 +39,6 @@ async fn pokeapi_execute_session_compiles_via_plugin_and_queries_live_api() {
         stub.display()
     );
 
-    std::env::set_var("PLASM_AUTH_JWT_SECRET", JWT_TEST_SECRET);
-
     let poke_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apis/pokeapi");
     let cgs =
         Arc::new(load_schema(&poke_dir).unwrap_or_else(|e| panic!("load pokeapi schema: {e}")));
@@ -64,7 +55,7 @@ async fn pokeapi_execute_session_compiles_via_plugin_and_queries_live_api() {
         ..ExecutionConfig::default()
     };
     let engine = ExecutionEngine::new(config).expect("engine");
-    let mut st = build_plasm_host_state(PlasmHostBootstrap {
+    let st = build_plasm_host_state(PlasmHostBootstrap {
         engine,
         mode: ExecutionMode::Live,
         registry: reg,
@@ -73,24 +64,6 @@ async fn pokeapi_execute_session_compiles_via_plugin_and_queries_live_api() {
         incoming_auth: None,
         run_artifacts: std::sync::Arc::new(plasm_agent::run_artifacts::RunArtifactStore::memory()),
         session_graph_persistence: None,
-    });
-    let (fw, mcp, storage) =
-        auth_framework_host::init_plasm_http_auth_bundle_memory(JWT_TEST_SECRET.to_string())
-            .await
-            .expect("auth-framework");
-    st.saas = Some(PlasmSaaSHostExtension {
-        auth_framework: Some(fw),
-        auth_storage: Some(storage.clone()),
-        oauth_link_catalog: std::sync::Arc::new(OauthLinkCatalog::default()),
-        outbound_secret_provider: Some(std::sync::Arc::new(AgentOutboundSecretProvider::new(
-            storage,
-            std::sync::Arc::new(OauthLinkCatalog::default()),
-        )) as std::sync::Arc<dyn SecretProvider>),
-        mcp_config_repository: None,
-        mcp_transport_auth: Some(
-            mcp as std::sync::Arc<dyn plasm_agent::mcp_transport_auth::McpTransportAuth>,
-        ),
-        tenant_binding: None,
     });
 
     let app = discovery_execute_router(st);

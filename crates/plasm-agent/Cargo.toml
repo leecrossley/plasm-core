@@ -2,7 +2,7 @@
 name = "plasm-agent"
 version = "0.1.0"
 edition = "2021"
-description = "Compatibility wrapper around plasm-agent-core + plasm-saas (binaries + `plasm_agent` re-exports)"
+description = "Open-source `plasm-mcp` / `plasm-cgs` / `plasm-pack-plugins` and `plasm_agent` re-exports of plasm-agent-core"
 readme = "README.md"
 
 [features]
@@ -35,7 +35,6 @@ plasm-compile = { path = "../plasm-compile" }
 plasm-runtime = { path = "../plasm-runtime" }
 plasm-trace = { path = "../plasm-trace" }
 plasm-plugin-host = { path = "../plasm-plugin-host" }
-plasm-trace-sink = { path = "../plasm-trace-sink" }
 plasm-otel = { path = "../plasm-otel" }
 arc-swap = { workspace = true }
 anyhow = { workspace = true }
@@ -65,18 +64,12 @@ toon = { workspace = true }
 rust-mcp-sdk = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
-jsonwebtoken = { workspace = true }
-subtle = { workspace = true }
-# Upstream QuickStart references `.postgres()` without `cfg(feature)`; compile needs `postgres-storage`
-# even when we only use `InMemoryStorage` at runtime (see auth_framework::storage::memory).
-auth-framework = { workspace = true }
-sqlx = { workspace = true, features = ["migrate", "chrono", "uuid"] }
-opentelemetry = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 insta = { workspace = true, features = ["json"] }
 jsonwebtoken = { workspace = true }
+auth-framework = { workspace = true }
 proptest = { workspace = true }
 serde = { workspace = true }
 serde_urlencoded = { workspace = true }

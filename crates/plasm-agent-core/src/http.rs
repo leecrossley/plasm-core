@@ -3,7 +3,7 @@
 //! Flow: `POST /v1/discover` → use `entry_id` + `entity` from candidates → `POST /execute` → follow
 //! `Location` with `GET` (session JSON) → `POST` the same path with expressions.
 //!
-//! - `GET /v1/health`, `GET /v1/auth/status` (auth-framework wiring; `503` when disabled), `GET /v1/registry`, `GET /v1/registry/:entry_id`, `GET /v1/registry/:entry_id/tool-model`, `POST /v1/discover`
+//! - `GET /v1/health`, `GET /v1/auth/status` (liveness + capability probe: OSS returns `200` with `open_source: true` when no SaaS extension; hosted builds without `auth_framework` return `503`), `GET /v1/registry`, …, `POST /v1/discover`
 //! - `POST /execute` — JSON `{ entry_id, entities, principal? }` → `303` + `Location` only (no body); ids are in the URL (`principal` required when `PLASM_AUTH_RESOLUTION=delegated`)
 //! - `GET /execute/:prompt_hash/:session` — `200` + JSON (`prompt`, `entry_id`, `entities`, …)
 //! - `POST /execute/:prompt_hash/:session` — `text/plain` or JSON expressions (one or newline-separated / `expressions` array); `Accept`: json | ndjson | table | toon (**default** when omitted: **toon**, entity rows only; no duration/cache metadata)
@@ -28,6 +28,7 @@ use crate::run_artifacts::RunArtifactStore;
 use crate::server_state::{CatalogBootstrap, PlasmHostState, PlasmOssHostState};
 use crate::session_graph_persistence::SessionGraphPersistence;
 use crate::session_identity::LogicalSessionRegistry;
+use crate::local_trace_archive::LocalTraceArchive;
 use crate::trace_hub::{TraceHubBuilder, TraceHubConfig};
 use crate::trace_sink_emit::{EnvTraceIngestClient, TraceIngestClient};
 use plasm_otel::tower_http_trace_parent_span;
@@ -65,10 +66,22 @@ pub fn build_plasm_host_state(bootstrap: PlasmHostBootstrap) -> PlasmHostState {
     ));
     let catalog = CatalogRuntime::new(registry, catalog_bootstrap);
     let trace_ingest: Arc<dyn TraceIngestClient> = Arc::new(EnvTraceIngestClient);
+    let local_trace_archive = match LocalTraceArchive::from_env() {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::error!(
+                target: "plasm_agent::http",
+                error = %e,
+                "PLASM_TRACE_ARCHIVE_DIR: invalid path (disabling local trace archive)"
+            );
+            None
+        }
+    };
     let trace_hub_requested = TraceHubConfig::from_env();
-    let trace_hub = Arc::new(
-        TraceHubBuilder::from_config(trace_hub_requested).build(Some(trace_ingest.clone())),
-    );
+    let trace_hub = Arc::new(TraceHubBuilder::from_config(trace_hub_requested).build(
+        Some(trace_ingest.clone()),
+        local_trace_archive.clone(),
+    ));
     let trace_hub_config = TraceHubConfig {
         bounds: trace_hub.bounds(),
     };
@@ -87,6 +100,7 @@ pub fn build_plasm_host_state(bootstrap: PlasmHostBootstrap) -> PlasmHostState {
             trace_hub,
             trace_hub_config,
             trace_ingest,
+            local_trace_archive,
             trace_sink_read_base_url: std::env::var("PLASM_TRACE_SINK_READ_URL")
                 .ok()
                 .or_else(|| std::env::var("PLASM_TRACE_SINK_URL").ok())

@@ -56,12 +56,12 @@ async fn oauth_test_postgres_url() -> Option<(Option<ContainerDrop>, String)> {
     Some((Some(ContainerDrop(node)), url))
 }
 
-fn petstore_registry() -> Arc<InMemoryCgsRegistry> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/schemas/petstore");
-    let cgs = Arc::new(load_schema(&dir).expect("petstore schema"));
+fn dnd5e_registry() -> Arc<InMemoryCgsRegistry> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apis/dnd5e");
+    let cgs = Arc::new(load_schema(&dir).expect("dnd5e schema"));
     Arc::new(InMemoryCgsRegistry::from_pairs(vec![(
-        "petstore".into(),
-        "Petstore".into(),
+        "dnd5e".into(),
+        "D&D 5e".into(),
         vec!["demo".into()],
         cgs.clone(),
     )]))
@@ -114,7 +114,7 @@ async fn spawn_mcp_server() -> Option<(String, tokio::task::JoinHandle<()>, Opti
     let mut st = build_plasm_host_state(PlasmHostBootstrap {
         engine,
         mode: ExecutionMode::Live,
-        registry: petstore_registry(),
+        registry: dnd5e_registry(),
         catalog_bootstrap: CatalogBootstrap::Fixed,
         plugin_manager: None,
         incoming_auth: Some(Arc::new(incoming)),

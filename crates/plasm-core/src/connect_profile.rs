@@ -20,7 +20,7 @@ pub enum CatalogAuthCapability {
     ApiKeyAndOauth,
 }
 
-/// OAuth-specific metadata for connect flows (authorization-code / Ops-hosted OAuth).
+/// OAuth-specific metadata for connect flows (e.g. authorization code with an external provider).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogOauthCapability {
     /// `oauth.provider` is present and non-empty when an `oauth:` block exists.
@@ -29,7 +29,7 @@ pub struct CatalogOauthCapability {
     pub scope_catalog_present: bool,
 }
 
-/// Stable JSON projection consumed by control-plane UIs and policy resolvers.
+/// Stable JSON projection for tool-model consumers and policy resolvers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogConnectProfile {
     pub capability: CatalogAuthCapability,

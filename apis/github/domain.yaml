@@ -1,4 +1,4 @@
-version: 13
+version: 16
 
 http_backend: https://api.github.com
 
@@ -84,6 +84,24 @@ entities:
       repo_owner:
         target: User
         cardinality: one
+      workflows:
+        target: Workflow
+        cardinality: many
+        materialize:
+          kind: query_scoped_bindings
+          capability: workflow_query
+          bindings:
+            owner: owner
+            repo: repo
+      workflow_runs:
+        target: WorkflowRun
+        cardinality: many
+        materialize:
+          kind: query_scoped_bindings
+          capability: workflow_run_query
+          bindings:
+            owner: owner
+            repo: repo
   Issue:
     id_field: id
     key_vars:
@@ -146,6 +164,49 @@ entities:
         - not_planned
         - duplicate
         required: false
+      issue_type_id:
+        field_type: integer
+        path: type.id
+        required: false
+      issue_type_node_id:
+        field_type: string
+        path: type.node_id
+        string_semantics: short
+        required: false
+      issue_type_name:
+        field_type: string
+        path: type.name
+        string_semantics: short
+        required: false
+      issue_type_color:
+        field_type: select
+        path: type.color
+        allowed_values:
+        - gray
+        - blue
+        - green
+        - yellow
+        - orange
+        - red
+        - pink
+        - purple
+        required: false
+      issue_type_is_enabled:
+        field_type: boolean
+        path: type.is_enabled
+        required: false
+      sub_issues_total:
+        field_type: integer
+        path: sub_issues_summary.total
+        required: false
+      sub_issues_completed:
+        field_type: integer
+        path: sub_issues_summary.completed
+        required: false
+      sub_issues_percent_completed:
+        field_type: number
+        path: sub_issues_summary.percent_completed
+        required: false
       locked:
         field_type: boolean
         required: false
@@ -178,12 +239,25 @@ entities:
       milestone:
         target: Milestone
         cardinality: one
+      issue_type:
+        target: IssueType
+        cardinality: one
       labels:
         target: Label
         cardinality: many
         materialize:
           kind: query_scoped_bindings
           capability: issue_label_query
+          bindings:
+            owner: owner
+            repo: repo
+            issue_number: number
+      sub_issues:
+        target: Issue
+        cardinality: many
+        materialize:
+          kind: query_scoped_bindings
+          capability: issue_sub_issue_query
           bindings:
             owner: owner
             repo: repo
@@ -250,6 +324,33 @@ entities:
       draft:
         field_type: boolean
         required: false
+      head_ref:
+        field_type: string
+        path: head.ref
+        string_semantics: short
+        required: false
+      head_sha:
+        field_type: string
+        path: head.sha
+        string_semantics: short
+        required: false
+      base_ref:
+        field_type: string
+        path: base.ref
+        string_semantics: short
+        required: false
+      base_sha:
+        field_type: string
+        path: base.sha
+        string_semantics: short
+        required: false
+      mergeable:
+        field_type: boolean
+        required: false
+      mergeable_state:
+        field_type: string
+        string_semantics: short
+        required: false
       merged_at:
         field_type: date
         value_format: rfc3339
@@ -280,6 +381,36 @@ entities:
       milestone:
         target: Milestone
         cardinality: one
+      changed_files:
+        target: PullRequestFile
+        cardinality: many
+        materialize:
+          kind: query_scoped_bindings
+          capability: pr_file_query
+          bindings:
+            owner: owner
+            repo: repo
+            pull_number: number
+      reviews:
+        target: PullRequestReview
+        cardinality: many
+        materialize:
+          kind: query_scoped_bindings
+          capability: pr_review_query
+          bindings:
+            owner: owner
+            repo: repo
+            pull_number: number
+      review_comments:
+        target: PullRequestReviewComment
+        cardinality: many
+        materialize:
+          kind: query_scoped_bindings
+          capability: pr_review_comment_query
+          bindings:
+            owner: owner
+            repo: repo
+            pull_number: number
   Commit:
     id_field: sha
     key_vars:
@@ -379,6 +510,10 @@ entities:
         field_type: string
         string_semantics: markdown
         required: false
+      commit_id:
+        field_type: string
+        string_semantics: short
+        required: false
       submitted_at:
         field_type: date
         value_format: rfc3339
@@ -387,6 +522,13 @@ entities:
         field_type: string
         string_semantics: short
         required: false
+    relations:
+      pull_request:
+        target: PullRequest
+        cardinality: one
+      user:
+        target: User
+        cardinality: one
   PullRequestFile:
     id_field: filename
     description: >-
@@ -714,6 +856,55 @@ entities:
         field_type: string
         string_semantics: short
         required: false
+  IssueType:
+    key_vars:
+    - org
+    - id
+    id_field: id
+    description: An organization-level GitHub issue type
+    fields:
+      org:
+        field_type: string
+        string_semantics: short
+        required: true
+      id:
+        field_type: integer
+        required: true
+      node_id:
+        field_type: string
+        string_semantics: short
+        required: true
+      name:
+        field_type: string
+        string_semantics: short
+        required: true
+      description:
+        field_type: string
+        string_semantics: markdown
+        required: false
+      color:
+        field_type: select
+        allowed_values:
+        - gray
+        - blue
+        - green
+        - yellow
+        - orange
+        - red
+        - pink
+        - purple
+        required: false
+      is_enabled:
+        field_type: boolean
+        required: false
+      created_at:
+        field_type: date
+        value_format: rfc3339
+        required: false
+      updated_at:
+        field_type: date
+        value_format: rfc3339
+        required: false
   Gist:
     id_field: id
     description: >-
@@ -784,6 +975,60 @@ entities:
         field_type: string
         string_semantics: short
         required: false
+      pull_number:
+        field_type: integer
+        path: pull_request_url
+        derive:
+          type: segments_after_prefix
+          prefix: https://api.github.com/repos/
+          alternate_prefixes:
+          - http://api.github.com/repos/
+          part_index: 3
+        required: false
+      review_id:
+        field_type: integer
+        path: pull_request_review_id
+        required: false
+      original_commit_id:
+        field_type: string
+        string_semantics: short
+        required: false
+      position:
+        field_type: integer
+        required: false
+      original_position:
+        field_type: integer
+        required: false
+      line:
+        field_type: integer
+        required: false
+      original_line:
+        field_type: integer
+        required: false
+      side:
+        field_type: select
+        allowed_values:
+        - LEFT
+        - RIGHT
+        required: false
+      start_line:
+        field_type: integer
+        required: false
+      start_side:
+        field_type: select
+        allowed_values:
+        - LEFT
+        - RIGHT
+        required: false
+      subject_type:
+        field_type: select
+        allowed_values:
+        - line
+        - file
+        required: false
+      in_reply_to_id:
+        field_type: integer
+        required: false
       html_url:
         field_type: string
         string_semantics: short
@@ -848,6 +1093,73 @@ entities:
       contributions:
         field_type: integer
         required: false
+  Workflow:
+    key_vars:
+    - owner
+    - repo
+    - id
+    id_field: id
+    description: A GitHub Actions workflow configured in a repository
+    fields:
+      owner:
+        field_type: string
+        string_semantics: short
+        required: true
+      repo:
+        field_type: string
+        string_semantics: short
+        required: true
+      id:
+        field_type: integer
+        required: true
+      node_id:
+        field_type: string
+        string_semantics: short
+        required: false
+      name:
+        field_type: string
+        string_semantics: short
+        required: true
+      path:
+        field_type: string
+        string_semantics: short
+        required: false
+      state:
+        field_type: select
+        allowed_values:
+        - active
+        - deleted
+        - disabled_fork
+        - disabled_inactivity
+        - disabled_manually
+        required: false
+      created_at:
+        field_type: date
+        value_format: rfc3339
+        required: false
+      updated_at:
+        field_type: date
+        value_format: rfc3339
+        required: false
+      html_url:
+        field_type: string
+        string_semantics: short
+        required: false
+      badge_url:
+        field_type: string
+        string_semantics: short
+        required: false
+    relations:
+      runs:
+        target: WorkflowRun
+        cardinality: many
+        materialize:
+          kind: query_scoped_bindings
+          capability: workflow_run_by_workflow_query
+          bindings:
+            owner: owner
+            repo: repo
+            workflow_id: id
   WorkflowRun:
     key_vars:
     - owner
@@ -871,13 +1183,32 @@ entities:
         field_type: string
         string_semantics: short
         required: false
-      status:
+      display_title:
         field_type: string
         string_semantics: short
         required: false
+      status:
+        field_type: select
+        allowed_values:
+        - queued
+        - in_progress
+        - completed
+        - waiting
+        - requested
+        - pending
+        required: false
       conclusion:
-        field_type: string
-        string_semantics: short
+        field_type: select
+        allowed_values:
+        - success
+        - failure
+        - neutral
+        - cancelled
+        - skipped
+        - timed_out
+        - action_required
+        - stale
+        - startup_failure
         required: false
       event:
         field_type: string
@@ -885,6 +1216,34 @@ entities:
         required: false
       workflow_id:
         field_type: integer
+        required: false
+      run_number:
+        field_type: integer
+        required: false
+      run_attempt:
+        field_type: integer
+        required: false
+      head_branch:
+        field_type: string
+        string_semantics: short
+        required: false
+      head_sha:
+        field_type: string
+        string_semantics: short
+        required: false
+      path:
+        field_type: string
+        string_semantics: short
+        required: false
+      actor_login:
+        field_type: string
+        path: actor.login
+        string_semantics: short
+        required: false
+      triggering_actor_login:
+        field_type: string
+        path: triggering_actor.login
+        string_semantics: short
         required: false
       html_url:
         field_type: string
@@ -901,6 +1260,214 @@ entities:
       updated_at:
         field_type: date
         value_format: rfc3339
+        required: false
+    relations:
+      workflow:
+        target: Workflow
+        cardinality: one
+      actor:
+        target: User
+        cardinality: one
+      triggering_actor:
+        target: User
+        cardinality: one
+      jobs:
+        target: WorkflowJob
+        cardinality: many
+        materialize:
+          kind: query_scoped_bindings
+          capability: workflow_job_query
+          bindings:
+            owner: owner
+            repo: repo
+            run_id: id
+      artifacts:
+        target: WorkflowArtifact
+        cardinality: many
+        materialize:
+          kind: query_scoped_bindings
+          capability: workflow_artifact_query
+          bindings:
+            owner: owner
+            repo: repo
+            run_id: id
+      usage:
+        target: WorkflowRunUsage
+        cardinality: one
+  WorkflowJob:
+    key_vars:
+    - owner
+    - repo
+    - run_id
+    - id
+    id_field: id
+    description: A GitHub Actions job within a workflow run
+    fields:
+      owner:
+        field_type: string
+        string_semantics: short
+        required: true
+      repo:
+        field_type: string
+        string_semantics: short
+        required: true
+      run_id:
+        field_type: integer
+        required: true
+      id:
+        field_type: integer
+        required: true
+      run_attempt:
+        field_type: integer
+        required: false
+      name:
+        field_type: string
+        string_semantics: short
+        required: false
+      status:
+        field_type: select
+        allowed_values:
+        - queued
+        - in_progress
+        - completed
+        - waiting
+        - requested
+        - pending
+        required: false
+      conclusion:
+        field_type: select
+        allowed_values:
+        - success
+        - failure
+        - neutral
+        - cancelled
+        - skipped
+        - timed_out
+        - action_required
+        - stale
+        - startup_failure
+        required: false
+      started_at:
+        field_type: date
+        value_format: rfc3339
+        required: false
+      completed_at:
+        field_type: date
+        value_format: rfc3339
+        required: false
+      html_url:
+        field_type: string
+        string_semantics: short
+        required: false
+      runner_name:
+        field_type: string
+        string_semantics: short
+        required: false
+      runner_group_name:
+        field_type: string
+        string_semantics: short
+        required: false
+      labels:
+        field_type: array
+        required: false
+        items:
+          type: string
+          string_semantics: short
+  WorkflowArtifact:
+    key_vars:
+    - owner
+    - repo
+    - id
+    id_field: id
+    description: A downloadable artifact produced by a GitHub Actions workflow run
+    fields:
+      owner:
+        field_type: string
+        string_semantics: short
+        required: true
+      repo:
+        field_type: string
+        string_semantics: short
+        required: true
+      id:
+        field_type: integer
+        required: true
+      run_id:
+        field_type: integer
+        path: workflow_run.id
+        required: false
+      name:
+        field_type: string
+        string_semantics: short
+        required: true
+      size_in_bytes:
+        field_type: integer
+        required: false
+      expired:
+        field_type: boolean
+        required: false
+      created_at:
+        field_type: date
+        value_format: rfc3339
+        required: false
+      updated_at:
+        field_type: date
+        value_format: rfc3339
+        required: false
+      expires_at:
+        field_type: date
+        value_format: rfc3339
+        required: false
+      archive_download_url:
+        field_type: string
+        string_semantics: short
+        required: false
+  WorkflowRunUsage:
+    key_vars:
+    - owner
+    - repo
+    - run_id
+    id_field: run_id
+    description: Timing and billed runner usage for a GitHub Actions workflow run
+    fields:
+      owner:
+        field_type: string
+        string_semantics: short
+        required: true
+      repo:
+        field_type: string
+        string_semantics: short
+        required: true
+      run_id:
+        field_type: integer
+        required: true
+      run_duration_ms:
+        field_type: integer
+        required: false
+        path: run_duration_ms
+      ubuntu_total_ms:
+        field_type: integer
+        path: billable.UBUNTU.total_ms
+        required: false
+      ubuntu_jobs:
+        field_type: integer
+        path: billable.UBUNTU.jobs
+        required: false
+      macos_total_ms:
+        field_type: integer
+        path: billable.MACOS.total_ms
+        required: false
+      macos_jobs:
+        field_type: integer
+        path: billable.MACOS.jobs
+        required: false
+      windows_total_ms:
+        field_type: integer
+        path: billable.WINDOWS.total_ms
+        required: false
+      windows_jobs:
+        field_type: integer
+        path: billable.WINDOWS.jobs
         required: false
   Notification:
     id_field: id
@@ -1105,6 +1672,12 @@ capabilities:
     - body
     - state
     - state_reason
+    - issue_type_id
+    - issue_type_name
+    - issue_type_color
+    - sub_issues_total
+    - sub_issues_completed
+    - sub_issues_percent_completed
     - locked
     - comments
     - created_at
@@ -1163,6 +1736,26 @@ capabilities:
       - desc
       required: false
       role: sort_direction
+  issue_sub_issue_query:
+    kind: query
+    entity: Issue
+    description: List sub-issues under a parent issue.
+    scope_aggregate_key_policy: omit_when_redundant
+    parameters:
+    - name: owner
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
+    - name: repo
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
+    - name: issue_number
+      type: integer
+      required: true
+      role: scope
   issue_search:
     kind: search
     entity: Issue
@@ -1357,11 +1950,16 @@ capabilities:
     description: List reviews on a pull request.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
-    - name: repository
-      type: entity_ref
-      target: Repository
+    - name: owner
+      type: string
       required: true
       role: scope
+      string_semantics: short
+    - name: repo
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
     - name: pull_number
       type: integer
       required: true
@@ -1374,11 +1972,16 @@ capabilities:
       request number and returns file rows, not pull request rows.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
-    - name: repository
-      type: entity_ref
-      target: Repository
+    - name: owner
+      type: string
       required: true
       role: scope
+      string_semantics: short
+    - name: repo
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
     - name: pull_number
       type: integer
       required: true
@@ -1389,11 +1992,16 @@ capabilities:
     description: List inline review comments on a pull request.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
-    - name: repository
-      type: entity_ref
-      target: Repository
+    - name: owner
+      type: string
       required: true
       role: scope
+      string_semantics: short
+    - name: repo
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
     - name: pull_number
       type: integer
       required: true
@@ -1414,6 +2022,7 @@ capabilities:
     - pull_number
     - state
     - body
+    - commit_id
     - submitted_at
     - html_url
   pr_review_comment_get:
@@ -1428,9 +2037,165 @@ capabilities:
     - path
     - diff_hunk
     - commit_id
+    - pull_number
+    - review_id
+    - line
+    - side
+    - start_line
+    - start_side
+    - subject_type
     - html_url
     - created_at
     - updated_at
+  pr_review_create:
+    kind: create
+    entity: PullRequestReview
+    description: >-
+      Start a pull request review, or submit it immediately when an event is
+      supplied.
+    provides:
+    - id
+    - owner
+    - repo
+    - pull_number
+    - state
+    - body
+    - commit_id
+    - submitted_at
+    - html_url
+    scope_aggregate_key_policy: omit_when_redundant
+    parameters:
+    - name: repository
+      type: entity_ref
+      target: Repository
+      required: true
+      role: scope
+    - name: pull_number
+      type: integer
+      required: true
+      role: scope
+    - name: body
+      type: string
+      required: false
+      string_semantics: markdown
+    - name: commit_id
+      type: string
+      required: false
+      string_semantics: short
+      description: Commit SHA for the review; omit to let GitHub choose the latest pull request head.
+    - name: event
+      type: select
+      allowed_values:
+      - APPROVE
+      - REQUEST_CHANGES
+      - COMMENT
+      required: false
+      description: Omit to create a pending review.
+  pr_review_submit:
+    kind: action
+    entity: PullRequestReview
+    description: Submit an existing pending pull request review.
+    parameters:
+    - name: event
+      type: select
+      allowed_values:
+      - APPROVE
+      - REQUEST_CHANGES
+      - COMMENT
+      required: true
+    - name: body
+      type: string
+      required: false
+      string_semantics: markdown
+    output:
+      type: side_effect
+      description: Submit the pending pull request review with the chosen review decision.
+  pr_review_delete:
+    kind: delete
+    entity: PullRequestReview
+    description: Delete a pending pull request review.
+  pr_review_comment_create:
+    kind: create
+    entity: PullRequestReviewComment
+    description: >-
+      Add an inline review comment to a pull request diff, or reply to an
+      existing review comment.
+    provides:
+    - id
+    - owner
+    - repo
+    - body
+    - path
+    - diff_hunk
+    - commit_id
+    - pull_number
+    - review_id
+    - line
+    - side
+    - start_line
+    - start_side
+    - subject_type
+    - html_url
+    - created_at
+    - updated_at
+    scope_aggregate_key_policy: omit_when_redundant
+    parameters:
+    - name: repository
+      type: entity_ref
+      target: Repository
+      required: true
+      role: scope
+    - name: pull_number
+      type: integer
+      required: true
+      role: scope
+    - name: body
+      type: string
+      required: true
+      string_semantics: markdown
+    - name: commit_id
+      type: string
+      required: false
+      string_semantics: short
+      description: Commit SHA to comment on for a new inline comment.
+    - name: path
+      type: string
+      required: false
+      string_semantics: short
+      description: Repository file path to comment on for a new inline comment.
+    - name: line
+      type: integer
+      required: false
+      description: Diff line for a new inline comment.
+    - name: side
+      type: select
+      allowed_values:
+      - LEFT
+      - RIGHT
+      required: false
+      description: Side of the diff for the line.
+    - name: start_line
+      type: integer
+      required: false
+      description: First diff line for a multi-line comment.
+    - name: start_side
+      type: select
+      allowed_values:
+      - LEFT
+      - RIGHT
+      required: false
+      description: Side of the diff for start_line.
+    - name: subject_type
+      type: select
+      allowed_values:
+      - line
+      - file
+      required: false
+      description: Whether the comment is on a diff line or an entire file.
+    - name: in_reply_to
+      type: integer
+      required: false
+      description: Existing review comment id to reply to.
   branch_query:
     kind: query
     entity: Branch
@@ -1480,17 +2245,67 @@ capabilities:
       type: boolean
       required: false
       description: GitHub `anon` query parameter — include anonymous contributors (boolean filter, not a user reference).
+  workflow_query:
+    kind: query
+    entity: Workflow
+    description: List GitHub Actions workflows configured in a repository.
+    scope_aggregate_key_policy: omit_when_redundant
+    parameters:
+    - name: owner
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
+    - name: repo
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
+  workflow_get:
+    kind: get
+    entity: Workflow
+    description: Get a GitHub Actions workflow by numeric id or workflow file name.
+    provides:
+    - id
+    - owner
+    - repo
+    - node_id
+    - name
+    - path
+    - state
+    - created_at
+    - updated_at
+    - html_url
+    - badge_url
+  workflow_dispatch:
+    kind: action
+    entity: Workflow
+    description: Trigger a workflow dispatch event for a workflow.
+    parameters:
+    - name: ref
+      type: string
+      required: true
+      string_semantics: short
+      description: Branch, tag, or commit SHA to run the workflow on.
+    output:
+      type: side_effect
+      description: Queue a workflow run for the selected workflow and ref.
   workflow_run_query:
     kind: query
     entity: WorkflowRun
     description: List GitHub Actions workflow runs for a repository.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
-    - name: repository
-      type: entity_ref
-      target: Repository
+    - name: owner
+      type: string
       required: true
       role: scope
+      string_semantics: short
+    - name: repo
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
     - name: branch
       type: string
       required: false
@@ -1575,10 +2390,155 @@ capabilities:
     - conclusion
     - event
     - workflow_id
+    - run_number
+    - run_attempt
+    - display_title
+    - head_branch
+    - head_sha
+    - path
+    - actor_login
+    - triggering_actor_login
     - html_url
     - run_started_at
     - created_at
     - updated_at
+  workflow_run_by_workflow_query:
+    kind: query
+    entity: WorkflowRun
+    description: List runs for one GitHub Actions workflow.
+    scope_aggregate_key_policy: omit_when_redundant
+    parameters:
+    - name: owner
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
+    - name: repo
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
+    - name: workflow_id
+      type: integer
+      required: true
+      role: scope
+    - name: branch
+      type: string
+      required: false
+      string_semantics: short
+      description: Filter runs for this head branch name.
+    - name: event
+      type: string
+      required: false
+      string_semantics: short
+      description: Event type that triggered the workflow.
+    - name: status
+      type: select
+      allowed_values:
+      - completed
+      - action_required
+      - cancelled
+      - failure
+      - neutral
+      - skipped
+      - stale
+      - success
+      - timed_out
+      - in_progress
+      - queued
+      - requested
+      - waiting
+      required: false
+  workflow_run_rerun:
+    kind: action
+    entity: WorkflowRun
+    description: Rerun all jobs in a workflow run.
+    output:
+      type: side_effect
+      description: Queue a rerun of the workflow run.
+  workflow_run_rerun_failed_jobs:
+    kind: action
+    entity: WorkflowRun
+    description: Rerun only failed jobs in a workflow run.
+    output:
+      type: side_effect
+      description: Queue a rerun of failed jobs for the workflow run.
+  workflow_run_cancel:
+    kind: action
+    entity: WorkflowRun
+    description: Cancel an in-progress workflow run.
+    output:
+      type: side_effect
+      description: Request cancellation of the workflow run.
+  workflow_run_logs_delete:
+    kind: action
+    entity: WorkflowRun
+    description: Delete stored logs for a workflow run.
+    output:
+      type: side_effect
+      description: Delete GitHub's stored logs for the workflow run.
+  workflow_job_query:
+    kind: query
+    entity: WorkflowJob
+    description: List jobs in a workflow run.
+    scope_aggregate_key_policy: omit_when_redundant
+    parameters:
+    - name: owner
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
+    - name: repo
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
+    - name: run_id
+      type: integer
+      required: true
+      role: scope
+    - name: filter
+      type: select
+      allowed_values:
+      - latest
+      - all
+      required: false
+      description: Whether to include only latest-attempt jobs or all attempts.
+  workflow_artifact_query:
+    kind: query
+    entity: WorkflowArtifact
+    description: List artifacts produced by a workflow run.
+    scope_aggregate_key_policy: omit_when_redundant
+    parameters:
+    - name: owner
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
+    - name: repo
+      type: string
+      required: true
+      role: scope
+      string_semantics: short
+    - name: run_id
+      type: integer
+      required: true
+      role: scope
+  workflow_run_usage_get:
+    kind: get
+    entity: WorkflowRunUsage
+    description: Get timing and billable runner usage for a workflow run.
+    provides:
+    - owner
+    - repo
+    - run_id
+    - run_duration_ms
+    - ubuntu_total_ms
+    - ubuntu_jobs
+    - macos_total_ms
+    - macos_jobs
+    - windows_total_ms
+    - windows_jobs
   user_get:
     kind: get
     entity: User
@@ -1647,6 +2607,16 @@ capabilities:
     - followers
     - following
     - type
+  issue_type_query:
+    kind: query
+    entity: IssueType
+    description: List issue types configured for an organization.
+    parameters:
+    - name: org
+      type: entity_ref
+      target: Organization
+      required: true
+      role: scope
   org_repos_query:
     kind: query
     entity: Repository
@@ -2159,6 +3129,12 @@ capabilities:
     - body
     - state
     - state_reason
+    - issue_type_id
+    - issue_type_name
+    - issue_type_color
+    - sub_issues_total
+    - sub_issues_completed
+    - sub_issues_percent_completed
     - locked
     - comments
     - created_at
@@ -2210,6 +3186,12 @@ capabilities:
     - body
     - state
     - state_reason
+    - issue_type_id
+    - issue_type_name
+    - issue_type_color
+    - sub_issues_total
+    - sub_issues_completed
+    - sub_issues_percent_completed
     - locked
     - comments
     - created_at
@@ -2265,6 +3247,117 @@ capabilities:
     kind: delete
     entity: Issue
     description: Delete an issue (requires admin or sufficient repo permission).
+  issue_sub_issue_add:
+    kind: action
+    entity: Issue
+    description: Add an existing issue as a sub-issue of this issue.
+    parameters:
+    - name: sub_issue_id
+      type: integer
+      required: true
+      description: Numeric database id of the issue to attach as a sub-issue.
+    - name: replace_parent
+      type: boolean
+      required: false
+      description: Move the sub-issue from another parent when GitHub allows it.
+    output:
+      type: side_effect
+      description: Attach the selected issue under this parent issue.
+  issue_sub_issue_remove:
+    kind: action
+    entity: Issue
+    description: Remove a sub-issue from this parent issue.
+    parameters:
+    - name: sub_issue_id
+      type: integer
+      required: true
+      description: Numeric database id of the sub-issue to remove.
+    output:
+      type: side_effect
+      description: Remove the selected child from this issue's sub-issue list.
+  issue_sub_issue_reprioritize:
+    kind: action
+    entity: Issue
+    description: Reorder a sub-issue within this parent issue.
+    parameters:
+    - name: sub_issue_id
+      type: integer
+      required: true
+      description: Numeric database id of the sub-issue to reposition.
+    - name: after_id
+      type: integer
+      required: false
+      description: Place the sub-issue after this sibling id.
+    - name: before_id
+      type: integer
+      required: false
+      description: Place the sub-issue before this sibling id.
+    output:
+      type: side_effect
+      description: Reposition the selected sub-issue within the parent issue.
+  issue_assignees_add:
+    kind: action
+    entity: Issue
+    description: Add one or more assignees to an issue without replacing existing assignees.
+    parameters:
+    - name: assignees
+      type: array
+      required: true
+      items:
+        type: entity_ref
+        target: User
+      description: Assignee logins to add.
+    output:
+      type: side_effect
+      description: Add the selected assignees to the issue.
+  issue_assignees_remove:
+    kind: action
+    entity: Issue
+    description: Remove one or more assignees from an issue.
+    parameters:
+    - name: assignees
+      type: array
+      required: true
+      items:
+        type: entity_ref
+        target: User
+      description: Assignee logins to remove.
+    output:
+      type: side_effect
+      description: Remove the selected assignees from the issue.
+  issue_assign_copilot:
+    kind: action
+    entity: Issue
+    description: Assign GitHub Copilot coding agent to work on an issue.
+    parameters:
+    - name: target_repo
+      type: string
+      required: true
+      string_semantics: short
+      description: Owner/name repository where Copilot should work, such as octocat/Hello-World.
+    - name: base_branch
+      type: string
+      required: true
+      string_semantics: short
+      description: Base branch Copilot should branch from.
+    - name: custom_instructions
+      type: string
+      required: false
+      string_semantics: markdown
+      description: Additional instructions for Copilot.
+    - name: custom_agent
+      type: string
+      required: false
+      string_semantics: short
+      description: Custom Copilot coding agent name, when configured.
+    - name: model
+      type: string
+      required: false
+      string_semantics: short
+      description: Model name for Copilot to use, when supported.
+    output:
+      type: side_effect
+      description: Assign Copilot to the issue with the requested agent assignment settings.
   issue_comment_create:
     kind: create
     entity: IssueComment
@@ -2383,6 +3476,19 @@ capabilities:
     output:
       type: side_effect
       description: Merge the pull request into its base branch when the API call succeeds.
+  pr_update_branch:
+    kind: action
+    entity: PullRequest
+    description: Update a pull request branch from its base branch.
+    parameters:
+    - name: expected_head_sha
+      type: string
+      required: false
+      string_semantics: short
+      description: Only update if the pull request head still has this SHA.
+    output:
+      type: side_effect
+      description: Start GitHub's branch update for the pull request when the API call succeeds.
   pr_create:
     kind: create
     entity: PullRequest
@@ -2747,6 +3853,29 @@ oauth:
         any_of:
         - repo
         - public_repo
+      issue_assignees_add:
+        any_of:
+        - repo
+        - public_repo
+      issue_assignees_remove:
+        any_of:
+        - repo
+        - public_repo
+      issue_assign_copilot:
+        any_of:
+        - repo
+      issue_sub_issue_add:
+        any_of:
+        - repo
+        - public_repo
+      issue_sub_issue_remove:
+        any_of:
+        - repo
+        - public_repo
+      issue_sub_issue_reprioritize:
+        any_of:
+        - repo
+        - public_repo
       issue_comment_query:
         any_of:
         - repo
@@ -2767,6 +3896,16 @@ oauth:
         any_of:
         - repo
         - public_repo
+      issue_sub_issue_query:
+        any_of:
+        - repo
+        - public_repo
+      issue_type_query:
+        any_of:
+        - read:org
+        - write:org
+        - admin:org
+        - repo
       issue_update:
         any_of:
         - repo
@@ -2868,7 +4007,15 @@ oauth:
         any_of:
         - repo
         - public_repo
+      pr_update_branch:
+        any_of:
+        - repo
+        - public_repo
       pr_query:
+        any_of:
+        - repo
+        - public_repo
+      pr_review_comment_create:
         any_of:
         - repo
         - public_repo
@@ -2884,7 +4031,19 @@ oauth:
         any_of:
         - repo
         - public_repo
+      pr_review_create:
+        any_of:
+        - repo
+        - public_repo
+      pr_review_delete:
+        any_of:
+        - repo
+        - public_repo
       pr_review_query:
+        any_of:
+        - repo
+        - public_repo
+      pr_review_submit:
         any_of:
         - repo
         - public_repo
@@ -2970,11 +4129,55 @@ oauth:
         - user
         - repo
         - public_repo
+      workflow_artifact_query:
+        any_of:
+        - repo
+        - public_repo
+      workflow_dispatch:
+        any_of:
+        - repo
+        - workflow
+      workflow_get:
+        any_of:
+        - repo
+        - public_repo
+      workflow_job_query:
+        any_of:
+        - repo
+        - public_repo
+      workflow_query:
+        any_of:
+        - repo
+        - public_repo
+      workflow_run_by_workflow_query:
+        any_of:
+        - repo
+        - public_repo
+      workflow_run_cancel:
+        any_of:
+        - repo
+        - workflow
       workflow_run_get:
         any_of:
         - repo
         - public_repo
+      workflow_run_logs_delete:
+        any_of:
+        - repo
+        - workflow
       workflow_run_query:
+        any_of:
+        - repo
+        - public_repo
+      workflow_run_rerun:
+        any_of:
+        - repo
+        - workflow
+      workflow_run_rerun_failed_jobs:
+        any_of:
+        - repo
+        - workflow
+      workflow_run_usage_get:
         any_of:
         - repo
         - public_repo
@@ -2995,7 +4198,17 @@ oauth:
         any_of:
         - repo
         - public_repo
+      Issue.issue_type:
+        any_of:
+        - read:org
+        - write:org
+        - admin:org
+        - repo
       Issue.labels:
+        any_of:
+        - repo
+        - public_repo
+      Issue.sub_issues:
         any_of:
         - repo
         - public_repo
@@ -3043,6 +4256,46 @@ oauth:
         any_of:
         - read:user
         - user
+        - repo
+        - public_repo
+      Repository.workflow_runs:
+        any_of:
+        - repo
+        - public_repo
+      Repository.workflows:
+        any_of:
+        - repo
+        - public_repo
+      Workflow.runs:
+        any_of:
+        - repo
+        - public_repo
+      WorkflowRun.actor:
+        any_of:
+        - read:user
+        - user
+        - repo
+        - public_repo
+      WorkflowRun.artifacts:
+        any_of:
+        - repo
+        - public_repo
+      WorkflowRun.jobs:
+        any_of:
+        - repo
+        - public_repo
+      WorkflowRun.triggering_actor:
+        any_of:
+        - read:user
+        - user
+        - repo
+        - public_repo
+      WorkflowRun.usage:
+        any_of:
+        - repo
+        - public_repo
+      WorkflowRun.workflow:
+        any_of:
         - repo
         - public_repo
 auth:

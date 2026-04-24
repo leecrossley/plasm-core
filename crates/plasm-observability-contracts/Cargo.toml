@@ -1,0 +1,11 @@
+[package]
+name = "plasm-observability-contracts"
+version = "0.1.0"
+edition = "2021"
+description = "Shared serde/wire types for Plasm audit, trace ingest, and run artifact identity (OSS boundary)"
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }

@@ -858,9 +858,9 @@ pub enum OutputType {
 ///
 /// For each secret-bearing slot on other variants, specify **exactly one** of:
 /// - `env` — environment variable name (local dev / operator-managed)
-/// - `hosted_kv` — auth-framework `kv_store` key (Plasm-hosted secrets; must start with `plasm:outbound:`)
+/// - `hosted_kv` — auth-framework `kv_store` key path (must start with `plasm:outbound:`)
 ///
-/// The runtime resolves values via [`plasm_runtime::auth::SecretProvider`] (`get_secret` vs `get_hosted_secret`).
+/// The runtime resolves values through [`plasm_runtime::auth::SecretProvider`] (env vs `kv_store` lookup).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "scheme", rename_all = "snake_case")]
 pub enum AuthScheme {
@@ -1001,7 +1001,7 @@ pub struct OauthScopeEntry {
     pub docs_url: Option<String>,
 }
 
-/// Named bundle of scopes for documentation (e.g. control-plane defaults); not an auth config object.
+/// Named bundle of scopes for documentation (e.g. default scope bundles); not an auth config object.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OauthDefaultScopeSet {
     #[serde(default, skip_serializing_if = "String::is_empty")]

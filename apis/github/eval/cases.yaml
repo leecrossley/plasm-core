@@ -497,3 +497,83 @@
   covers: [search_text]
   expect:
     entities_any: [Issue]
+
+- id: gh-58
+  schema: github
+  goal: "List GitHub Actions workflows configured in plasm/plasm, including workflow names and file paths"
+  tags: [query, actions]
+  covers: [query_filtered]
+  expect:
+    entities_any: [Workflow]
+
+- id: gh-59
+  schema: github
+  goal: "For workflow run 12345 in plasm/plasm, list the latest attempt jobs and include their runner labels"
+  tags: [query, actions]
+  covers: [query_filtered]
+  expect:
+    entities_any: [WorkflowJob]
+
+- id: gh-60
+  schema: github
+  goal: "List artifacts for workflow run 12345 in plasm/plasm and continue with page(pg1) if the first page truncates"
+  tags: [query, actions, pagination]
+  covers: [query_filtered, page_next]
+  expect:
+    entities_any: [WorkflowArtifact]
+
+- id: gh-61
+  schema: github
+  goal: "Get billable timing usage for workflow run 12345 in plasm/plasm, split by Ubuntu, macOS, and Windows"
+  tags: [get, actions]
+  covers: [get]
+  expect:
+    entities_any: [WorkflowRunUsage]
+
+- id: gh-62
+  schema: github
+  goal: "Delete the pending review 777 on plasm/plasm pull request 20; do not delete issue comments or review comments"
+  tags: [delete, actions, review]
+  covers: [delete]
+  expect:
+    entities_any: [PullRequestReview]
+
+- id: gh-63
+  schema: github
+  goal: "List the sub-issues under plasm/plasm#42 so the project board can show child work, not comments"
+  tags: [query, issues, sub_issues]
+  covers: [query_filtered]
+  expect:
+    entities_any: [Issue]
+
+- id: gh-64
+  schema: github
+  goal: "Attach issue database id 123456 as a sub-issue of plasm/plasm#42 without changing labels or assignees"
+  tags: [action, write, sub_issues]
+  covers: [invoke]
+  expect:
+    entities_any: [Issue]
+
+- id: gh-65
+  schema: github
+  goal: "List issue types configured for the rust-lang organization, including enabled status and color"
+  tags: [query, issue_type, org]
+  covers: [query_filtered]
+  expect:
+    entities_any: [IssueType]
+
+- id: gh-66
+  schema: github
+  goal: "Add eval-user-alpha and eval-user-beta as assignees on plasm/plasm#7 without replacing current assignees"
+  tags: [action, write, assignees]
+  covers: [invoke]
+  expect:
+    entities_any: [Issue]
+
+- id: gh-67
+  schema: github
+  goal: "Assign Copilot coding agent to plasm/plasm#9 using target repo plasm/plasm, base branch main, and custom instructions"
+  tags: [action, write, copilot]
+  covers: [invoke]
+  expect:
+    entities_any: [Issue]

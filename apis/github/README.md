@@ -1,6 +1,6 @@
 # GitHub REST API — Plasm CGS Schema
 
-A [Plasm](../../README.md) domain model for the [GitHub REST API](https://docs.github.com/en/rest). The surface is **authored for agent workflows** (repos, issues, PRs, CI runs, collaborators, tags, etc.)—not a mechanical export of every OpenAPI operation. See **19** entities and **67** capabilities in the tables below (run `plasm schema validate apis/github` for the live count).
+A [Plasm](../../README.md) domain model for the [GitHub REST API](https://docs.github.com/en/rest). The surface is **authored for agent workflows** (repos, issues, PRs, CI runs, collaborators, tags, etc.)—not a mechanical export of every OpenAPI operation. See **24** entities and **91** capabilities in the tables below (run `plasm schema validate apis/github` for the live count).
 
 ```bash
 # Run against the live API (requires GITHUB_TOKEN in env)
@@ -111,12 +111,12 @@ CLI: `user get-me` (no positional ID required). Internally dispatched as a param
 
 | Entity | Key | Fields | Relations |
 |--------|-----|--------|-----------|
-| `Repository` | `id` (numeric) + compound `owner`+`repo` (slug; wire `name`) | owner, repo, full_name, description, private, fork, language, stargazers_count, forks_count, open_issues_count, default_branch, archived, visibility, html_url, created/updated/pushed_at | → `User` (`repo_owner`) |
-| `Issue` | compound `owner`+`repo`+`number` | owner, repo, number, id, repository_url, title, body, state, state_reason, locked, comments, html_url, created/updated/closed_at | → `User` (user, assignee), → `Milestone` |
-| `PullRequest` | compound `owner`+`repo`+`number` | owner, repo, number, id, repository_url, title, body, state, locked, draft, html_url, created/updated/closed/merged_at | → `User` (user, assignee), → `Milestone` |
+| `Repository` | `id` (numeric) + compound `owner`+`repo` (slug; wire `name`) | owner, repo, full_name, description, private, fork, language, stargazers_count, forks_count, open_issues_count, default_branch, archived, visibility, html_url, created/updated/pushed_at | → `User` (`repo_owner`), → workflows / workflow runs |
+| `Issue` | compound `owner`+`repo`+`number` | owner, repo, number, id, repository_url, title, body, state, state_reason, issue type fields, sub-issue summary, locked, comments, html_url, created/updated/closed_at | → `User` (user, assignee), → `Milestone`, → `IssueType`, → labels / sub-issues |
+| `PullRequest` | compound `owner`+`repo`+`number` | owner, repo, number, id, repository_url, title, body, state, locked, draft, head/base refs, mergeability, html_url, created/updated/closed/merged_at | → `User` (user, assignee), → `Milestone`, → changed files / reviews / review comments |
 | `Commit` | compound `owner`+`repo`+`sha` | owner, repo, sha, message, html_url | — |
 | `Branch` | compound `owner`+`repo`+`name` (branch) | owner, repo, name, commit_sha, protected, html_url | — |
-| `PullRequestReview` | compound `owner`+`repo`+`pull_number`+`id` (review id) | id, owner, repo, pull_number, state, body, submitted_at, html_url | — |
+| `PullRequestReview` | compound `owner`+`repo`+`pull_number`+`id` (review id) | id, owner, repo, pull_number, state, body, commit_id, submitted_at, html_url | → `PullRequest`, → `User` |
 | `PullRequestFile` | `filename` (string) | filename, sha, status, additions, deletions, patch | — |
 | `User` | `login` (string) | login, id, name, company, blog, location, email, bio, public_repos, public_gists, hireable, site_admin, html_url, avatar_url, created_at | — |
 | `Label` | compound `owner`+`repo`+`name` (`name` in URL; `id` on row) | owner, repo, name, id, description, color, default | — |
@@ -124,12 +124,17 @@ CLI: `user get-me` (no positional ID required). Internally dispatched as a param
 | `Release` | compound `owner`+`repo`+`id` | owner, repo, id, tag_name, name, body, draft, prerelease, html_url, created_at, published_at | → `User` (author) |
 | `IssueComment` | `id` (integer) | body, html_url, created_at, updated_at | → `User` |
 | `Organization` | `login` (string) | id, name, description, blog, location, email, avatar_url, url, public_repos, public_gists, followers, following, type | — |
+| `IssueType` | compound `org`+`id` | org, id, node_id, name, description, color, is_enabled, created/updated_at | — |
 | `Gist` | `id` (string) | description, html_url, public, comments, created_at, updated_at | → `User` (owner) |
 | `Notification` | `id` (string, thread id) | unread, reason, updated_at, last_read_at, url, subscription_url | — |
-| `PullRequestReviewComment` | `id` (integer) | body, path, diff_hunk, commit_id, html_url, created/updated_at | → `User` |
+| `PullRequestReviewComment` | `id` (integer) | body, path, diff_hunk, commit_id, pull_number, review_id, line/side coordinates, subject_type, html_url, created/updated_at | → `User` |
 | `RepositoryTag` | `name` (string, per repo) | owner, repo, name, commit_sha, zipball/tarball URLs | — |
 | `Contributor` | `login` (string, per repo list row) | owner, repo, login, contributions | — |
-| `WorkflowRun` | compound `owner`+`repo`+`id` | owner, repo, id, name, status, conclusion, event, workflow_id, html_url, run_started/created/updated_at | — |
+| `Workflow` | compound `owner`+`repo`+`id` | owner, repo, id, name, path, state, html_url, badge_url, created/updated_at | → workflow runs |
+| `WorkflowRun` | compound `owner`+`repo`+`id` | owner, repo, id, name, display_title, typed status/conclusion, event, workflow_id, run number/attempt, head branch/SHA, actors, html_url, run_started/created/updated_at | → workflow, jobs, artifacts, usage, actors |
+| `WorkflowJob` | compound `owner`+`repo`+`run_id`+`id` | owner, repo, run_id, id, run_attempt, name, typed status/conclusion, runner labels, started/completed_at, html_url | — |
+| `WorkflowArtifact` | compound `owner`+`repo`+`id` | owner, repo, id, run_id, name, size_in_bytes, expired, archive_download_url, created/updated/expires_at | — |
+| `WorkflowRunUsage` | compound `owner`+`repo`+`run_id` | owner, repo, run_id, run_duration_ms, Ubuntu/macOS/Windows billed job counts and milliseconds | — |
 
 ### Capabilities
 
@@ -144,6 +149,7 @@ CLI: `user get-me` (no positional ID required). Internally dispatched as a param
 | `issue_get` | get | `issue --owner O --repo R N` | `GET /repos/{owner}/{repo}/issues/{number}` |
 | `issue_query` | query (scoped) | `issue query --owner octocat --repo Hello-World` | `GET /repos/{owner}/{repo}/issues` |
 | `issue_search` | search | `issue search --q "is:issue is:open"` | `GET /search/issues` |
+| `issue_sub_issue_query` | query (scoped) | `issue issue-sub-issue-query --owner O --repo R --issue_number N` | `GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues` |
 | `pr_get` | get | `pullrequest --owner O --repo R N` | `GET /repos/{owner}/{repo}/pulls/{number}` |
 | `pr_query` | query (scoped) | `pullrequest query --owner octocat --repo Hello-World` | `GET /repos/{owner}/{repo}/pulls` |
 | `pr_search` | search | `pullrequest search --q "is:pr is:merged"` | `GET /search/issues` |
@@ -158,6 +164,17 @@ CLI: `user get-me` (no positional ID required). Internally dispatched as a param
 | `contributor_query` | query (scoped) | `contributor contributor-query --owner O --repo R` | `GET /repos/{owner}/{repo}/contributors` |
 | `workflow_run_query` | query (scoped) | `workflowrun workflow-run-query --owner O --repo R` | `GET /repos/{owner}/{repo}/actions/runs` |
 | `workflow_run_get` | get | `workflowrun --owner O --repo R <id>` | `GET /repos/{owner}/{repo}/actions/runs/{run_id}` |
+| `workflow_query` | query (scoped) | `workflow query --owner O --repo R` | `GET /repos/{owner}/{repo}/actions/workflows` |
+| `workflow_get` | get | `workflow --owner O --repo R <id>` | `GET /repos/{owner}/{repo}/actions/workflows/{id}` |
+| `workflow_dispatch` | action | `workflow --owner O --repo R <id> dispatch --ref main` | `POST /repos/{owner}/{repo}/actions/workflows/{id}/dispatches` |
+| `workflow_run_by_workflow_query` | query (scoped) | `workflowrun workflow-run-by-workflow-query --owner O --repo R --workflow_id ID` | `GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs` |
+| `workflow_run_rerun` | action | `workflowrun --owner O --repo R <id> workflow-run-rerun` | `POST /repos/{owner}/{repo}/actions/runs/{id}/rerun` |
+| `workflow_run_rerun_failed_jobs` | action | `workflowrun --owner O --repo R <id> workflow-run-rerun-failed-jobs` | `POST /repos/{owner}/{repo}/actions/runs/{id}/rerun-failed-jobs` |
+| `workflow_run_cancel` | action | `workflowrun --owner O --repo R <id> workflow-run-cancel` | `POST /repos/{owner}/{repo}/actions/runs/{id}/cancel` |
+| `workflow_run_logs_delete` | action | `workflowrun --owner O --repo R <id> workflow-run-logs-delete` | `DELETE /repos/{owner}/{repo}/actions/runs/{id}/logs` |
+| `workflow_job_query` | query (scoped) | `workflowjob workflow-job-query --owner O --repo R --run_id ID` | `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs` |
+| `workflow_artifact_query` | query (scoped) | `workflowartifact workflow-artifact-query --owner O --repo R --run_id ID` | `GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts` |
+| `workflow_run_usage_get` | get | `workflowrunusage --owner O --repo R <run_id>` | `GET /repos/{owner}/{repo}/actions/runs/{run_id}/timing` |
 | `user_get` | get | `user octocat` | `GET /users/{login}` |
 | `user_get_me` | singleton | `user get-me` | `GET /user` |
 | `user_search` | search | `user search --q "location:london"` | `GET /search/users` |
@@ -170,6 +187,7 @@ CLI: `user get-me` (no positional ID required). Internally dispatched as a param
 | `issue_comment_query` | query (scoped) | `issuecomment issue-comment-query --owner octocat --repo Hello-World --issue_number 42` | `GET /repos/{owner}/{repo}/issues/{number}/comments` |
 | `repo_comment_query` | query (scoped) | `issuecomment repo-comment-query --owner octocat --repo Hello-World` | `GET /repos/{owner}/{repo}/issues/comments` |
 | `org_get` | get | `organization rust-lang` | `GET /orgs/{org}` |
+| `issue_type_query` | query (scoped) | `issuetype issue-type-query --org rust-lang` | `GET /orgs/{org}/issue-types` |
 | `org_repos_query` | query (scoped) | `repository org-repos-query --org rust-lang` | `GET /orgs/{org}/repos` |
 | `org_members_query` | query (scoped) | `user org-members-query --org rust-lang` | `GET /orgs/{org}/members` |
 | `gist_query` | query | `gist query` | `GET /gists` |
@@ -178,10 +196,21 @@ CLI: `user get-me` (no positional ID required). Internally dispatched as a param
 | `notification_get` | get | `notification <thread_id>` | `GET /notifications/threads/{thread_id}` |
 | `notification_mark_read` | action | `notification <thread_id> mark-read` | `PATCH /notifications/threads/{thread_id}` |
 | `issue_update` | update | `issue --owner O --repo R N update …` | `PATCH /repos/{owner}/{repo}/issues/{number}` |
+| `issue_assignees_add` | action | `issue --owner O --repo R N issue-assignees-add …` | `POST /repos/{owner}/{repo}/issues/{number}/assignees` |
+| `issue_assignees_remove` | action | `issue --owner O --repo R N issue-assignees-remove …` | `DELETE /repos/{owner}/{repo}/issues/{number}/assignees` |
+| `issue_assign_copilot` | action | `issue --owner O --repo R N issue-assign-copilot …` | `POST /repos/{owner}/{repo}/issues/{number}/assignees` |
+| `issue_sub_issue_add` | action | `issue --owner O --repo R N issue-sub-issue-add …` | `POST /repos/{owner}/{repo}/issues/{number}/sub_issues` |
+| `issue_sub_issue_remove` | action | `issue --owner O --repo R N issue-sub-issue-remove …` | `DELETE /repos/{owner}/{repo}/issues/{number}/sub_issue` |
+| `issue_sub_issue_reprioritize` | action | `issue --owner O --repo R N issue-sub-issue-reprioritize …` | `PATCH /repos/{owner}/{repo}/issues/{number}/sub_issues/priority` |
 | `issue_comment_create` | create | `issuecomment issue-comment-create …` | `POST /repos/{owner}/{repo}/issues/{issue_number}/comments` |
 | `issue_comment_update` | update | `issuecomment <id> issue-comment-update --owner O --repo R …` | `PATCH /repos/{owner}/{repo}/issues/comments/{id}` |
 | `pr_patch` | update | `pullrequest --owner O --repo R N pr-patch …` | `PATCH /repos/{owner}/{repo}/pulls/{number}` |
 | `pr_merge` | action | `pullrequest --owner O --repo R N pr-merge …` | `PUT /repos/{owner}/{repo}/pulls/{number}/merge` |
+| `pr_update_branch` | action | `pullrequest --owner O --repo R N pr-update-branch …` | `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` |
+| `pr_review_create` | create | `pullrequestreview pr-review-create --owner O --repo R --pull_number N …` | `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews` |
+| `pr_review_submit` | action | `pullrequestreview --owner O --repo R --pull_number N <review_id> pr-review-submit …` | `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{id}/events` |
+| `pr_review_delete` | delete | `pullrequestreview --owner O --repo R --pull_number N <review_id> pr-review-delete` | `DELETE /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{id}` |
+| `pr_review_comment_create` | create | `pullrequestreviewcomment pr-review-comment-create --owner O --repo R --pull_number N …` | `POST /repos/{owner}/{repo}/pulls/{pull_number}/comments` |
 | `label_create` | create | `label --owner O --repo R create …` | `POST /repos/{owner}/{repo}/labels` |
 | `repo_content_put` | action | `repository --owner O --repo R repo-content-put …` | `PUT /repos/{owner}/{repo}/contents/{path}` |
 | `pr_review_get` | get | `pullrequestreview --owner O --repo R --pull_number N <review_id>` | `GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{id}` |

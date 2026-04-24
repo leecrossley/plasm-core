@@ -88,3 +88,23 @@ pub fn totals_from_session_data(data: &SessionTraceData) -> TraceTotals {
     }
     t
 }
+
+impl From<TraceTotals> for plasm_observability_contracts::TraceTotals {
+    fn from(t: TraceTotals) -> Self {
+        Self {
+            plasm_tool_calls: t.plasm_tool_calls,
+            plasm_expressions: t.plasm_expressions,
+            expression_lines: t.expression_lines,
+            batched_plasm_invocations: t.batched_plasm_invocations,
+            domain_prompt_chars: t.domain_prompt_chars,
+            plasm_invocation_chars: t.plasm_invocation_chars,
+            plasm_response_chars: t.plasm_response_chars,
+            mcp_resource_read_chars: t.mcp_resource_read_chars,
+            total_duration_ms: t.total_duration_ms,
+            network_requests: t.network_requests,
+            cache_hits: t.cache_hits,
+            cache_misses: t.cache_misses,
+            http_trace_entry_count: t.http_trace_entry_count,
+        }
+    }
+}

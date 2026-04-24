@@ -44,11 +44,16 @@ pub struct HealthResponse {
     pub status: &'static str,
 }
 
-/// Returned by [`get_auth_status`] when [`PlasmHostState::auth_framework`] is initialized.
+/// Returned by [`get_auth_status`] (hosted: auth-framework on; OSS: data-plane only).
 #[derive(Debug, Serialize)]
 pub struct AuthStatusResponse {
     pub status: &'static str,
-    pub storage: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_source: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<&'static str>,
 }
 
 /// Public health check (no incoming auth).
@@ -60,19 +65,33 @@ pub async fn get_auth_status(
     Extension(st): Extension<PlasmHostState>,
 ) -> Result<Json<AuthStatusResponse>, (StatusCode, Json<serde_json::Value>)> {
     if st.auth_framework().is_some() {
-        Ok(Json(AuthStatusResponse {
+        return Ok(Json(AuthStatusResponse {
             status: "ok",
-            storage: "memory",
-        }))
-    } else {
-        Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "auth_framework_disabled",
-                "detail": "auth-framework is not initialized (use --http or --mcp to enable)"
-            })),
-        ))
+            storage: Some("memory"),
+            open_source: None,
+            message: None,
+        }));
     }
+    // Open-source `plasm-mcp` (no `PlasmSaaSHostExtension`): 200 — auth-framework is intentionally absent.
+    if st.saas.is_none() {
+        return Ok(Json(AuthStatusResponse {
+            status: "ok",
+            storage: None,
+            open_source: Some(true),
+            message: Some(
+                "This process does not run auth-framework. Use GET /v1/health for liveness. \
+Hosted control-plane auth (JWT, API keys, tenant policy) is composed by the private plasm-saas / plasm-mcp-app stack.",
+            ),
+        }));
+    }
+    // Hosted / composed stack without a framework instance (e.g. tests) — keep legacy 503.
+    Err((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": "auth_framework_disabled",
+            "detail": "auth-framework is not initialized in this process"
+        })),
+    ))
 }
 
 fn discovery_problem(e: DiscoveryError) -> Problem {

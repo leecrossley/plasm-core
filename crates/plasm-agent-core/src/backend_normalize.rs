@@ -47,7 +47,7 @@ mod tests {
     fn detects_github_schema_dir_and_domain_file() {
         assert!(is_bundled_github_schema("apis/github"));
         assert!(is_bundled_github_schema("apis/github/domain.yaml"));
-        assert!(!is_bundled_github_schema("fixtures/schemas/petstore"));
+        assert!(!is_bundled_github_schema("apis/dnd5e"));
     }
 
     #[test]
@@ -61,7 +61,7 @@ mod tests {
             "https://api.github.com"
         );
         assert_eq!(
-            normalize_live_backend_url("fixtures/schemas/petstore", "https://github.com"),
+            normalize_live_backend_url("apis/dnd5e", "https://github.com"),
             "https://github.com"
         );
         assert_eq!(

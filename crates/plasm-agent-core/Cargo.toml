@@ -21,7 +21,7 @@ plasm-compile = { path = "../plasm-compile" }
 plasm-runtime = { path = "../plasm-runtime" }
 plasm-trace = { path = "../plasm-trace" }
 plasm-plugin-host = { path = "../plasm-plugin-host" }
-plasm-trace-sink = { path = "../plasm-trace-sink" }
+plasm-observability-contracts = { path = "../plasm-observability-contracts" }
 plasm-otel = { path = "../plasm-otel" }
 arc-swap = { workspace = true }
 anyhow = { workspace = true }

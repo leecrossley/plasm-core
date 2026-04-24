@@ -13,6 +13,7 @@ use crate::incoming_auth::IncomingAuthVerifier;
 use crate::mcp_config_repository::McpConfigRepository;
 use crate::mcp_transport_auth::McpTransportAuth;
 use crate::oauth_link_catalog::OauthLinkCatalog;
+use crate::local_trace_archive::LocalTraceArchive;
 use crate::run_artifacts::RunArtifactStore;
 use crate::session_graph_persistence::SessionGraphPersistence;
 use crate::session_identity::LogicalSessionRegistry;
@@ -62,7 +63,9 @@ pub struct PlasmOssHostState {
     pub trace_hub_config: TraceHubConfig,
     /// Best-effort POST of audit batches to the trace sink (`PLASM_TRACE_SINK_URL` when using [`EnvTraceIngestClient`]).
     pub trace_ingest: Arc<dyn TraceIngestClient>,
-    /// Trace sink read API base URL (defaults to `PLASM_TRACE_SINK_URL` when unset).
+    /// Optional local on-disk history (`PLASM_TRACE_ARCHIVE_DIR`) for OSS self-host durable reads.
+    pub local_trace_archive: Option<Arc<LocalTraceArchive>>,
+    /// Trace sink read API base URL (defaults to `PLASM_TRACE_SINK_URL` when unset). Highest precedence for durable list/detail.
     pub trace_sink_read_base_url: Option<String>,
 }
 

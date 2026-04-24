@@ -48,7 +48,7 @@ pub use plasm_trace::{
     totals_from_session_data, PlasmLineTraceMeta, RunArtifactArchiveRef, SessionTraceData,
     TraceEvent, TraceSegment, TraceTotals,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
@@ -62,7 +62,7 @@ pub type SessionTraceRecord = TraceSegment;
 pub type McpSessionTrace = SessionTraceData;
 
 /// Reference to the tenant MCP configuration that authenticated the transport (API key → config id).
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct McpConfigRef {
     pub config_id: String,
     pub tenant_id: String,
@@ -264,8 +264,12 @@ impl TraceHubBuilder {
     /// Build the hub. When `trace_ingest` is [`Some`], a bounded ingest worker is started.
     ///
     /// [`TraceHubBounds`] are **sanitized** here (each field `max(1)`); see [`TraceHub::bounds`].
-    pub fn build(self, trace_ingest: Option<Arc<dyn TraceIngestClient>>) -> TraceHub {
-        TraceHub::from_parts(trace_ingest, self.config)
+    pub fn build(
+        self,
+        trace_ingest: Option<Arc<dyn TraceIngestClient>>,
+        local_trace_archive: Option<Arc<crate::local_trace_archive::LocalTraceArchive>>,
+    ) -> TraceHub {
+        TraceHub::from_parts(trace_ingest, self.config, local_trace_archive)
     }
 }
 /// Cap stored reasoning text per `plasm` invocation (full `reasoning_chars` may be larger).
@@ -457,6 +461,8 @@ pub struct TraceHub {
     config: TraceHubConfig,
     /// Jobs in the ingest `mpsc` not yet received by the worker (incremented after successful `send`).
     ingest_channel_backlog: Arc<AtomicUsize>,
+    /// When set, completed sessions are also written to disk (`PLASM_TRACE_ARCHIVE_DIR`) for durable reads.
+    local_trace_archive: Option<Arc<crate::local_trace_archive::LocalTraceArchive>>,
 }
 
 impl Default for TraceHub {
@@ -467,12 +473,14 @@ impl Default for TraceHub {
 
 impl TraceHub {
     pub fn new(trace_ingest: Option<Arc<dyn TraceIngestClient>>) -> Self {
-        TraceHubBuilder::default().build(trace_ingest)
+        TraceHubBuilder::default()
+            .build(trace_ingest, None)
     }
 
     fn from_parts(
         trace_ingest: Option<Arc<dyn TraceIngestClient>>,
         mut config: TraceHubConfig,
+        local_trace_archive: Option<Arc<crate::local_trace_archive::LocalTraceArchive>>,
     ) -> Self {
         config.bounds = config.bounds.sanitized();
         let ingest_channel_backlog = Arc::new(AtomicUsize::new(0));
@@ -492,6 +500,7 @@ impl TraceHub {
             ingest_tx,
             config,
             ingest_channel_backlog,
+            local_trace_archive,
         }
     }
 
@@ -972,7 +981,7 @@ impl TraceHub {
     }
 
     pub async fn finalize_mcp_session(&self, trace_session_key: &str) {
-        let (trace_id, seq, ended_ms) = {
+        let (trace_id, seq, ended_ms, detail_for_archive) = {
             let mut g = self.inner.write().await;
             let Some(active) = g.active.remove(trace_session_key) else {
                 return;
@@ -991,6 +1000,10 @@ impl TraceHub {
                 ended_ms,
                 last_seq_emitted: seq,
             };
+            let detail_for_archive = self
+                .local_trace_archive
+                .as_ref()
+                .map(|_| Self::completed_to_detail(&completed));
             let evicted_oldest_completed =
                 g.completed.len() >= self.config.bounds.max_completed_traces;
             if evicted_oldest_completed {
@@ -1006,8 +1019,20 @@ impl TraceHub {
                 evicted_oldest_completed,
                 self.config.bounds.max_completed_traces as i64,
             );
-            (trace_id, seq, ended_ms)
+            (trace_id, seq, ended_ms, detail_for_archive)
         };
+        if let (Some(arch), Some(detail)) = (self.local_trace_archive.as_ref(), detail_for_archive) {
+            let arch = arch.clone();
+            tokio::spawn(async move {
+                if let Err(e) = arch.persist_trace(&detail).await {
+                    tracing::warn!(
+                        target: "plasm_agent::trace_hub",
+                        error = %e,
+                        "PLASM_TRACE_ARCHIVE_DIR: failed to persist completed trace (non-fatal)"
+                    );
+                }
+            });
+        }
         self.emit_json(
             trace_id,
             &TraceSsePayload::Terminal {
@@ -1292,7 +1317,7 @@ mod tests {
             .max_completed_traces(0)
             .sse_broadcast_capacity(0)
             .ingest_queue_capacity(0)
-            .build(None);
+            .build(None, None);
         let b = hub.bounds();
         assert_eq!(b.max_completed_traces, 1);
         assert_eq!(b.sse_broadcast_capacity, 1);
