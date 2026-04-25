@@ -413,6 +413,9 @@ pub struct ApplyCapabilitySeedsOutcome {
     pub principal: Option<String>,
     pub waves: Vec<CapabilityWaveOutcome>,
     pub binding_updated: bool,
+    /// When true, this call opened a **new** execute row (new `(prompt_hash, session)` and symbol space).
+    /// Any cached `e#` / `m#` / `p#` from a prior `add_capabilities` in this **logical** session is void.
+    pub new_symbol_space: bool,
     /// MCP still had a `(prompt_hash, session)` pair but the execute store dropped it (TTL / idle).
     /// Caller should finalize the in-memory MCP trace and treat the binding as replaced.
     pub stale_execute_binding_recovered: bool,
@@ -521,6 +524,54 @@ fn group_seed_entities_by_entry(seeds: &[CapabilitySeed]) -> IndexMap<String, Ve
         *entities = normalize_execute_entity_names(std::mem::take(entities));
     }
     groups
+}
+
+/// Canonical multi-catalog plan: primary catalog (lexicographically first among distinct `entry_id`s)
+/// and a **deterministic** processing order (primary first, then every other catalog in sorted order).
+/// This removes dependence on the order seeds appear in the `add_capabilities` request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapabilityExposurePlan {
+    pub primary_entry_id: String,
+    pub seeds_by_entry: IndexMap<String, Vec<String>>,
+    /// Catalog `entry_id`s in order: primary, then non-primary keys sorted lexicographically.
+    pub process_order: Vec<String>,
+}
+
+pub(crate) fn build_capability_exposure_plan(seeds: &[CapabilitySeed]) -> Option<CapabilityExposurePlan> {
+    let seeds_by_entry = group_seed_entities_by_entry(seeds);
+    if seeds_by_entry.is_empty() {
+        return None;
+    }
+    let primary_entry_id = primary_entry_id_for_grouped(&seeds_by_entry);
+    let process_order = process_order_for_capability_plan(&primary_entry_id, &seeds_by_entry);
+    Some(CapabilityExposurePlan {
+        primary_entry_id,
+        seeds_by_entry,
+        process_order,
+    })
+}
+
+/// Primary first, then all other `entry_id`s in lexicographic order (independent of seed order).
+fn process_order_for_capability_plan(
+    primary_entry_id: &str,
+    grouped: &IndexMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut rest: Vec<&str> = grouped
+        .keys()
+        .map(|k| k.as_str())
+        .filter(|k| *k != primary_entry_id)
+        .collect();
+    rest.sort();
+    let mut out = vec![primary_entry_id.to_string()];
+    out.extend(rest.iter().map(|s| (*s).to_string()));
+    out
+}
+
+/// For expand-only waves: every catalog in the request is already loaded; use sorted `entry_id` order.
+fn process_order_for_expand_group(grouped: &IndexMap<String, Vec<String>>) -> Vec<String> {
+    let mut keys: Vec<String> = grouped.keys().cloned().collect();
+    keys.sort();
+    keys
 }
 
 /// Lexicographically first catalog `entry_id` in the group map.
@@ -1048,18 +1099,24 @@ pub async fn expand_execute_domain_session(
             .or_default()
             .push(seed.entity.clone());
     }
-    let add_lines: Vec<String> = groups
+    let eid_order = process_order_for_expand_group(&groups);
+    let add_lines: Vec<String> = eid_order
         .iter()
-        .map(|(eid, ents)| {
+        .map(|eid| {
+            let ents = groups.get(eid).expect("eid in order is from groups");
             format_add_capabilities_wave_line(eid, &normalize_execute_entity_names(ents.clone()))
         })
         .collect();
-    for (eid, group) in groups {
+    for eid in eid_order {
         let Some(ctx) = sess.contexts_by_entry.get(&eid) else {
             return Err(format!(
                 "unknown catalog entry `{eid}` in loaded session schemas"
             ));
         };
+        let group = groups
+            .get(&eid)
+            .ok_or_else(|| format!("internal error: missing seed group for `{eid}`"))?
+            .clone();
         let normalized = normalize_execute_entity_names(group);
         let refs: Vec<&str> = normalized.iter().map(|s| s.as_str()).collect();
         exp.expose_entities(&layers, ctx.cgs.as_ref(), eid.as_str(), &refs);
@@ -1158,10 +1215,12 @@ pub async fn apply_capability_seeds(
         }
     };
 
-    let grouped = group_seed_entities_by_entry(&seeds);
-    let primary_entry_id = primary_entry_id_for_grouped(&grouped);
+    let plan = build_capability_exposure_plan(&seeds)
+        .ok_or_else(|| "internal error: empty capability exposure plan".to_string())?;
+    let primary_entry_id = plan.primary_entry_id.clone();
 
-    let all_eids: Vec<String> = grouped.keys().cloned().collect();
+    let mut all_eids: Vec<String> = plan.seeds_by_entry.keys().cloned().collect();
+    all_eids.sort();
     let outbound_map_storage = if let Some(ref cfg) = tenant_mcp_cfg {
         Some(
             tenant_outbound_hosted_kv_for_entries(st, cfg.as_ref(), principal_incoming, &all_eids)
@@ -1173,9 +1232,11 @@ pub async fn apply_capability_seeds(
     let outbound_ref = outbound_map_storage.as_ref();
 
     let mut waves = Vec::new();
+    let mut new_symbol_space = false;
     let (prompt_hash, session_id, binding_updated) = match binding {
         None => {
-            let primary_entities = grouped
+            let primary_entities = plan
+                .seeds_by_entry
                 .get(&primary_entry_id)
                 .cloned()
                 .ok_or_else(|| "missing primary entities".to_string())?;
@@ -1188,14 +1249,19 @@ pub async fn apply_capability_seeds(
                     principal: principal.clone(),
                     logical_session_id,
                 },
-                grouped.len() <= 1,
+                plan.seeds_by_entry.len() <= 1,
                 outbound_ref,
             )
             .await?;
+            new_symbol_space = !created.reused;
             let mut open_md = String::new();
             if stale_execute_binding_recovered {
                 open_md.push_str(
-                    "_The previous execute session for this logical session was missing or expired; a new `(prompt_hash, session)` was opened. Monotonic `e#` / `m#` / `p#` apply to the new session only._\n\n",
+                    "**Prior Plasm symbol table is void.** The in-memory execute session for this logical handle was missing or expired. A new `(prompt_hash, session)` was opened — **discard** any cached `e#` / `m#` / `p#` or DOMAIN text from earlier `add_capabilities` output in this chat. Re-read the teaching table and `_meta.plasm` from this response only. Monotonic `e#` / `m#` / `p#` apply to the **new** session.\n\n",
+                );
+            } else if new_symbol_space {
+                open_md.push_str(
+                    "_New execute session: use `e#` / `m#` / `p#` from this open only._\n\n",
                 );
             }
             open_md.push_str(&format_add_capabilities_wave_line(
@@ -1249,10 +1315,13 @@ pub async fn apply_capability_seeds(
         Some((ph, sid)) => (ph.to_string(), sid.to_string(), false),
     };
 
-    for (eid, entities) in grouped.iter() {
+    for eid in &plan.process_order {
         if *eid == primary_entry_id && binding.is_none() {
             continue;
         }
+        let Some(entities) = plan.seeds_by_entry.get(eid) else {
+            continue;
+        };
         let has_session_entry = st
             .sessions
             .get_by_strs(&prompt_hash, &session_id)
@@ -1305,6 +1374,7 @@ pub async fn apply_capability_seeds(
         principal,
         waves,
         binding_updated,
+        new_symbol_space,
         stale_execute_binding_recovered,
         stale_binding_previous,
     })
@@ -3355,6 +3425,35 @@ mod tests {
         ];
         let grouped = group_seed_entities_by_entry(&seeds);
         assert_eq!(primary_entry_id_for_grouped(&grouped), "alpha");
+    }
+
+    #[test]
+    fn capability_exposure_plan_is_invariant_to_seed_order() {
+        let seeds_a = vec![
+            CapabilitySeed {
+                entry_id: "zeta".into(),
+                entity: "A".into(),
+            },
+            CapabilitySeed {
+                entry_id: "alpha".into(),
+                entity: "B".into(),
+            },
+        ];
+        let seeds_b = vec![
+            CapabilitySeed {
+                entry_id: "alpha".into(),
+                entity: "B".into(),
+            },
+            CapabilitySeed {
+                entry_id: "zeta".into(),
+                entity: "A".into(),
+            },
+        ];
+        let a = build_capability_exposure_plan(&normalize_capability_seeds(seeds_a)).expect("plan a");
+        let b = build_capability_exposure_plan(&normalize_capability_seeds(seeds_b)).expect("plan b");
+        assert_eq!(a, b);
+        assert_eq!(a.primary_entry_id, "alpha");
+        assert_eq!(a.process_order, vec!["alpha".to_string(), "zeta".to_string()]);
     }
 
     fn test_state_with_registry() -> PlasmHostState {

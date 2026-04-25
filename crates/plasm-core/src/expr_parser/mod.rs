@@ -40,9 +40,9 @@
 //! Value parsing lives in submodule `value` (file `value.rs` next to this one): strict `Entity(id)` / search
 //! vs lenient predicate and dotted-call arg RHS; see that file for scannerless / fault-tolerant parsing references.
 //!
-//! DOMAIN prompts may show bare `$` as a teaching placeholder for scalar / compound-key slots; it parses as the string `$`.
-//! Unary `Entity($)` is **not** accepted inside `{…}` filters, dotted-call arguments, or array elements — use a concrete id
-//! (the prompt renderer teaches unary get examples in quoted form).
+//! DOMAIN prompts may show bare `$` as a teaching placeholder; it parses as the string `$`.
+//! Unary `Entity($)` in `{…}` filters, dotted-call arguments, and array elements matches scalar teaching — a fill-in
+//! for that entity’s identity (the renderer emits `e#($)` the same as other witness placeholders).
 //!
 //! # Examples
 //!
@@ -175,11 +175,6 @@ pub enum ParseErrorKind {
     InvalidTemporalValue {
         message: String,
     },
-    /// Unary `Entity($)` is invalid inside `{…}` filters, dotted-call args, and array elements — `$` is prompt-only there.
-    UnaryEntityCtorPlaceholderNotAllowed {
-        /// Canonical CGS entity name (e.g. `User`).
-        entity: String,
-    },
     /// Prefer adding a variant above.
     Other {
         message: String,
@@ -285,10 +280,6 @@ impl fmt::Display for ParseErrorKind {
             ParseErrorKind::InvalidTemporalValue { message } => {
                 write!(f, "invalid date/time value: {message}")
             }
-            ParseErrorKind::UnaryEntityCtorPlaceholderNotAllowed { entity } => write!(
-                f,
-                "`{entity}($)` is not valid inside filters, method arguments, or array elements — `$` is a prompt placeholder, not an id"
-            ),
             ParseErrorKind::Other { message } => f.write_str(message),
         }
     }
@@ -460,8 +451,6 @@ pub(super) struct Parser<'a> {
     layers: ParserLayers<'a>,
     /// Same `m#` → kebab table as the SYMBOL MAP bundle (forgiving when expansion did not run).
     sym_map: SymbolMap,
-    /// When set, reject unary `Entity($)` after the entity ctor `(` — `$` is prompt-only outside top-level `Entity(id)` GET.
-    pub(super) reject_unary_entity_ctor_dollar_placeholder: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -478,7 +467,6 @@ impl<'a> Parser<'a> {
             pos: 0,
             layers,
             sym_map,
-            reject_unary_entity_ctor_dollar_placeholder: false,
         };
         p.skip_ws();
         p
@@ -756,15 +744,6 @@ impl<'a> Parser<'a> {
         self.pos = after_paren;
         let id_val = self.parse_value()?;
         self.expect_char(')')?;
-        if self.reject_unary_entity_ctor_dollar_placeholder
-            && id_val.is_domain_example_placeholder()
-        {
-            return Err(
-                self.err(ParseErrorKind::UnaryEntityCtorPlaceholderNotAllowed {
-                    entity: entity_canon.to_string(),
-                }),
-            );
-        }
         Ok(id_val)
     }
 
@@ -3244,9 +3223,9 @@ mod tests {
         );
     }
 
-    /// Unary `Entity($)` is a prompt-only fill-in; it must not parse inside brace-query RHS values.
+    /// Unary `Entity($)` parses inside brace-query RHS (DOMAIN fill-in, same as scalar `$`).
     #[test]
-    fn parse_rejects_unary_entity_ctor_dollar_in_brace_query() {
+    fn parse_accepts_unary_entity_ctor_dollar_in_brace_query() {
         let dir = std::path::Path::new("../../apis/github");
         if !dir.exists() {
             return;
@@ -3254,16 +3233,17 @@ mod tests {
         let Ok(cgs) = load_schema_dir(dir) else {
             return;
         };
-        let err =
-            parse("Issue{assignee=User($)}", &cgs).expect_err("User($) in filter must not parse");
-        assert!(
-            matches!(
-                err.kind,
-                ParseErrorKind::UnaryEntityCtorPlaceholderNotAllowed { .. }
-            ),
-            "expected UnaryEntityCtorPlaceholderNotAllowed, got {:?}",
-            err.kind
-        );
+        let r = parse("Issue{assignee=User($)}", &cgs).expect("User($) in filter should parse");
+        let Expr::Query(q) = r.expr else {
+            panic!("expected Query, got {:?}", r.expr);
+        };
+        let Some(pred) = &q.predicate else {
+            panic!("expected predicate");
+        };
+        let Predicate::Comparison { value, .. } = pred else {
+            panic!("expected simple comparison, got {pred:?}");
+        };
+        assert_eq!(value, &Value::String("$".into()));
     }
 
     fn compound_get_fixture_cgs() -> CGS {

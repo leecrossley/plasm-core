@@ -1,5 +1,7 @@
 # Canonical API schemas (`apis/`)
 
+**Monorepo layout:** in the private `plasm` repo, `apis/` at the repository root is a **symlink** to this directory (`plasm-oss/apis`). Commits to API definitions belong in the **plasm-oss** / plasm-core submodule, not a duplicate `apis/` tree in the monorepo.
+
 This directory holds **split** Plasm CGS trees: each API is a folder with `domain.yaml` + `mappings.yaml` (and a **README** describing scope, auth, and how to run `**plasm-repl`** / `**plasm-cgs`** / `**plasm-mcp**`). `**domain.yaml` validation:** `kind: action` requires non-empty `**provides:`** and/or `**output:`** with `**type: side_effect**` and a non-empty `**description:**` (effectful ops with no entity projection must say what they change). Authoring details: `[.cursor/skills/plasm-authoring/reference.md](../.cursor/skills/plasm-authoring/reference.md#action-output-provides-vs-outputside_effect)`.
 
 **Fixtures:** `fixtures/schemas/` holds **test** CGS trees and tiny interchange files (`test_schema.cgs.yaml`, `capability_with_input.cgs.yaml`, plus small slices such as **[PokéAPI mini](../fixtures/schemas/pokeapi_mini/)** for Hermit e2e, integration tests, and eval). **Curated** REST (and EVM) product APIs live only under `apis/`.

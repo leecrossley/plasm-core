@@ -520,6 +520,141 @@ impl IdentMetadata {
     }
 }
 
+/// Single `args: p# …` slot fragment for DOMAIN/TSV compact summaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompactArgSlotGloss {
+    pub text: String,
+    /// When false, keep a full `p#  ;;` gloss row (long enums, `select+`, `multiselect+`, unknown array shape, …).
+    pub allows_suppress_standalone_gloss: bool,
+}
+
+const MAX_INLINE_ARGS_SELECT_ENUM: usize = 80;
+
+/// Wire label + type + `req`/`opt` in one `args:` segment (conformance-focused; not for long human prose).
+pub(crate) fn build_compact_arg_slot_gloss(
+    sym: &str,
+    wire: &str,
+    required: bool,
+    meta: &IdentMetadata,
+    map: &SymbolMap,
+) -> CompactArgSlotGloss {
+    let ro = if required { "req" } else { "opt" };
+    match &meta.field_type {
+        FieldType::EntityRef { target } => {
+            let es = map.entity_sym(target.as_str());
+            let t = format!("ref:{}", es);
+            CompactArgSlotGloss {
+                text: format!("{sym} {wire} {t} {ro}"),
+                allows_suppress_standalone_gloss: true,
+            }
+        }
+        FieldType::Select | FieldType::MultiSelect => {
+            if let Some(ref av) = meta.allowed_values {
+                if !av.is_empty() {
+                    let joined = av.join(",");
+                    if joined.chars().count() <= MAX_INLINE_ARGS_SELECT_ENUM {
+                        let br = match &meta.field_type {
+                            FieldType::Select => format!("sel[{}]", joined),
+                            _ => format!("msel[{}]", joined),
+                        };
+                        return CompactArgSlotGloss {
+                            text: format!("{sym} {wire} {br} {ro}"),
+                            allows_suppress_standalone_gloss: true,
+                        };
+                    }
+                }
+            }
+            let t = if matches!(&meta.field_type, FieldType::Select) {
+                "select+"
+            } else {
+                "multiselect+"
+            };
+            CompactArgSlotGloss {
+                text: format!("{sym} {wire} {t} {ro}"),
+                allows_suppress_standalone_gloss: false,
+            }
+        }
+        FieldType::Array => {
+            if let Some(ref items) = meta.array_items {
+                let inner = array_element_gloss_label(items, Some(map));
+                CompactArgSlotGloss {
+                    text: format!("{sym} {wire} array[{inner}] {ro}"),
+                    allows_suppress_standalone_gloss: true,
+                }
+            } else {
+                CompactArgSlotGloss {
+                    text: format!("{sym} {wire} array+ {ro}"),
+                    allows_suppress_standalone_gloss: false,
+                }
+            }
+        }
+        _ => {
+            let t = array_or_scalar_gloss_label(
+                &meta.field_type,
+                &meta.array_items,
+                meta.string_semantics,
+                Some(map),
+            );
+            CompactArgSlotGloss {
+                text: format!("{sym} {wire} {t} {ro}"),
+                allows_suppress_standalone_gloss: true,
+            }
+        }
+    }
+}
+
+/// Joins compact slot glosses for `  ;;  … args: …` (DOMAIN) and TSV `Meaning`.
+pub(crate) fn join_compact_invocation_arg_fragments(fragments: Vec<CompactArgSlotGloss>) -> Option<String> {
+    if fragments.is_empty() {
+        return None;
+    }
+    Some(
+        fragments
+            .into_iter()
+            .map(|f| f.text)
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+// Match [`prompt_render::CAP_LEGEND_SEP`] and em dash in legends (U+2014) without importing `prompt_render`.
+const CAP_LEGEND_DOMAIN: &str = "  ;;  ";
+const LEGEND_EM_DASH: &str = " — ";
+
+/// `p#` that appear in a compact `args:` line and whether a standalone `p#` row may be omitted.
+pub(crate) fn args_line_suppressible_capability_syms(line: &str) -> Option<HashMap<String, bool>> {
+    let after = line.split_once(CAP_LEGEND_DOMAIN).map(|(_, a)| a)?;
+    let after_args = after.split_once("args:").map(|(_, a)| a)?;
+    let body = after_args
+        .split_once(LEGEND_EM_DASH)
+        .map(|(a, _)| a)
+        .unwrap_or(after_args)
+        .trim();
+    let mut m = HashMap::new();
+    for seg in body.split(';') {
+        let seg = seg.trim();
+        if seg.is_empty() {
+            continue;
+        }
+        let Some(sym) = seg.split_whitespace().next() else {
+            continue;
+        };
+        if !sym.starts_with('p') {
+            continue;
+        }
+        let has_plus = seg.contains("select+")
+            || seg.contains("multiselect+")
+            || seg.contains("msel+")
+            || seg.contains("array+");
+        m.insert(sym.to_string(), !has_plus);
+    }
+    if m.is_empty() {
+        None
+    } else {
+        Some(m)
+    }
+}
+
 /// Short type label for DOMAIN `p#` gloss (matches [`FieldType`] / capability inputs).
 /// Type keyword for a scalar `string` in DOMAIN gloss (`str` vs `markdown`, …).
 pub(crate) fn string_semantics_gloss_label(sem: Option<StringSemantics>) -> String {
@@ -838,6 +973,16 @@ impl SymbolMap {
     /// Resolve `p#` → canonical field name. Returns `None` if `sym` is not a known `p#` token.
     pub fn resolve_ident<'a>(&'a self, sym: &str) -> Option<&'a str> {
         self.sym_to_ident.get(sym).map(|s| s.as_str())
+    }
+
+    /// If `sym` maps a capability input parameter, return the `(capability domain entity, param wire)`.
+    pub fn capability_param_key_for_p_sym(&self, sym: &str) -> Option<(EntityName, String)> {
+        for ((dom, _cap, pname), s) in &self.cap_param_to_sym {
+            if s == sym {
+                return Some((EntityName::from(dom.as_str()), pname.clone()));
+            }
+        }
+        None
     }
 
     /// Rewrite canonical entity and field names in a short snippet into opaque `e#` / `p#` tokens for
@@ -2084,6 +2229,28 @@ mod tests {
         assert_ne!(pet_sym, s.to_symbol_map().entity_sym("Store"));
     }
 
+    /// `m#` / `p#` append-only invariants: adding a second entity must not renumber existing method
+    /// or field slot symbols for the first entity.
+    #[test]
+    fn domain_exposure_session_keeps_method_and_field_symbols_stable_across_waves() {
+        let dir = std::path::Path::new("../../fixtures/schemas/overshow_tools");
+        if !dir.exists() {
+            return;
+        }
+        let cgs = load_schema_dir(dir).unwrap();
+        let mut s = DomainExposureSession::new(&cgs, "", &["Profile"]);
+        let map0 = s.to_symbol_map();
+        let display_p = map0.ident_sym_entity_field("Profile", "display_name");
+        let get_m = map0.method_sym("Profile", "get");
+        s.expose_entities(&[&cgs], &cgs, "", &["RecordedContent"]);
+        let map1 = s.to_symbol_map();
+        assert_eq!(
+            map1.ident_sym_entity_field("Profile", "display_name"),
+            display_p
+        );
+        assert_eq!(map1.method_sym("Profile", "get"), get_m);
+    }
+
     #[test]
     fn ident_metadata_from_exposure_matches_build_ident_metadata() {
         let dir = std::path::Path::new("../../fixtures/schemas/petstore");
@@ -2365,5 +2532,13 @@ mod tests {
             .expect("method domain term");
         assert_eq!(dt.to_string(), m_str);
         assert!(matches!(dt, crate::DomainTerm::Method(_, _)));
+    }
+
+    #[test]
+    fn args_line_suppressible_marks_select_plus_for_extra_gloss() {
+        let line = "e1.m1()  ;;  args: p1 x str req; p2 y select+ opt — d";
+        let m = super::args_line_suppressible_capability_syms(line).expect("m");
+        assert_eq!(m.get("p1"), Some(&true));
+        assert_eq!(m.get("p2"), Some(&false));
     }
 }

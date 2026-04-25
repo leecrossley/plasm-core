@@ -14,7 +14,8 @@
 //! - [`Parser::parse_predicate_value_rhs`] / [`Parser::parse_dotted_call_arg_value_rhs`]: `Entity{…}` and
 //!   dotted-call `method(k=v,…)` allow unquoted phrases (spaces) until top-level `,` or `}` / `)`.
 //!   RHS may also be an **array literal** `[v1, v2]` (comma-separated; same strict [`Parser::parse_value`]
-//!   tokens per element). Unary `Entity($)` is rejected here (prompt placeholder, not a wire id); top-level `Entity($)` GET still uses [`Parser::parse_value`] without this restriction.
+//!   tokens per element). Unary `Entity($)` is allowed here (DOMAIN fill-in, same as scalar `$`); top-level
+//!   `Entity($)` GET also uses [`Parser::parse_value`].
 //!   Trailing `[`…`]` projection syntax applies only **after** the expression, not inside `{…}`.
 //!
 //! # Lenient parsing (references)
@@ -358,11 +359,7 @@ impl<'a> Parser<'a> {
         &mut self,
         close: PhraseClose,
     ) -> Result<Value, ParseError> {
-        let prev = self.reject_unary_entity_ctor_dollar_placeholder;
-        self.reject_unary_entity_ctor_dollar_placeholder = true;
-        let out = self.parse_predicate_or_dotted_call_arg_value_inner(close);
-        self.reject_unary_entity_ctor_dollar_placeholder = prev;
-        out
+        self.parse_predicate_or_dotted_call_arg_value_inner(close)
     }
 
     fn parse_predicate_or_dotted_call_arg_value_inner(

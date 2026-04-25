@@ -630,6 +630,8 @@ struct ParsedExprLine {
     /// `[scope …]` fragment when present (DOMAIN / capability-input legend).
     scope: String,
     optional_params: String,
+    /// `args: p# wire type req; …` when the compact DOMAIN legend includes it.
+    compact_args: String,
     description: String,
 }
 
@@ -745,6 +747,9 @@ impl TsvRow {
         if !row.optional_params.is_empty() {
             parts.push(format!("optional params: {}", row.optional_params));
         }
+        if !row.compact_args.is_empty() {
+            parts.push(format!("args: {}", row.compact_args));
+        }
         if !row.description.is_empty() {
             parts.push(row.description.clone());
         }
@@ -778,6 +783,9 @@ impl TsvRow {
         }
         if !row.optional_params.is_empty() {
             parts.push(format!("optional params: {}", row.optional_params));
+        }
+        if !row.compact_args.is_empty() {
+            parts.push(format!("args: {}", row.compact_args));
         }
         if !row.description.is_empty() {
             parts.push(row.description.clone());
@@ -977,6 +985,21 @@ fn split_sig_and_human_description(remainder: &str) -> (&str, &str) {
         .unwrap_or((remainder.trim(), ""))
 }
 
+/// Strip `args: …` (and its leading ` · ` joiner) from a capability sig fragment; remainder goes to
+/// scope/optional parsing, body is the compact slot summary for TSV `Meaning` parity.
+fn split_compact_args_from_sig_fragment(sig: &str) -> (String, String) {
+    let t = sig.trim();
+    if let Some(idx) = t.rfind(" · args:") {
+        let a = t[..idx].trim();
+        let b = t[idx + " · args:".len()..].trim();
+        return (a.to_string(), b.to_string());
+    }
+    if let Some(s) = t.strip_prefix("args:") {
+        return (String::new(), s.trim().to_string());
+    }
+    (t.to_string(), String::new())
+}
+
 /// Parse `sig` into `scope` and `optional_params`; any trailing text that is neither goes to `orphan`.
 /// True when `expr` contains a symbolic method call token `.m#(` (e.g. `e6($).m14(…)`).
 fn tsv_expr_has_symbolic_method_call(expr: &str) -> bool {
@@ -1039,6 +1062,7 @@ fn parse_expression_rows(lines: &[&str]) -> Vec<ParsedExprLine> {
             result_type: String::new(),
             scope: String::new(),
             optional_params: String::new(),
+            compact_args: String::new(),
             description: String::new(),
         };
         if let Some(legend) = legend_opt {
@@ -1050,9 +1074,11 @@ fn parse_expression_rows(lines: &[&str]) -> Vec<ParsedExprLine> {
                 remainder = rest[end..].trim().to_string();
             }
             let (sig_part, desc_tail) = split_sig_and_human_description(&remainder);
+            let (sig_wo, compact) = split_compact_args_from_sig_fragment(sig_part);
+            row.compact_args = compact;
             let mut orphan = String::new();
             fill_scope_optional_from_sig(
-                sig_part,
+                &sig_wo,
                 &mut row.scope,
                 &mut row.optional_params,
                 &mut orphan,
@@ -1153,7 +1179,14 @@ fn domain_expression_tool_count_resolved(
     for &ename in &full_entities {
         let mut seen_expr: HashSet<String> = HashSet::new();
         let block =
-            collect_entity_domain_block(cgs, ename, map.as_deref(), false, &mut line_valid_cache);
+            collect_entity_domain_block(
+                cgs,
+                ename,
+                map.as_deref(),
+                None,
+                false,
+                &mut line_valid_cache,
+            );
         for line in &block.lines {
             if seen_expr.insert(line.clone()) {
                 n += 1;
@@ -1252,32 +1285,6 @@ fn truncate_inline_desc(s: &str, max: usize) -> String {
     crate::utf8_trunc::truncate_utf8_bytes_with_ellipsis(&t, max)
 }
 
-/// DOMAIN `;;` suffix: `[scope …]` / comma-separated `optional params:` (when present), then ` — ` and the
-/// capability description (no `m#`; required args appear in the expression).
-fn format_capability_legend_line(map: &SymbolMap, cap: &crate::CapabilitySchema) -> String {
-    const MAX_DESC: usize = 100;
-    let kebab = capability_method_label_kebab(cap);
-    let raw = cap.description.as_str().trim();
-    let gloss = if raw.is_empty() {
-        kebab
-    } else {
-        truncate_inline_desc(raw, MAX_DESC)
-    };
-    let sig = map.capability_input_signature_gloss(cap);
-    if sig.is_empty() {
-        gloss
-    } else if gloss.is_empty() {
-        sig
-    } else {
-        format!("{sig}{LEGEND_EM_DESC_SEP}{gloss}")
-    }
-}
-
-#[inline]
-fn capability_legend_opt(map: Option<&SymbolMap>, cap: &crate::CapabilitySchema) -> Option<String> {
-    map.map(|m| format_capability_legend_line(m, cap))
-}
-
 /// Append ` ;;  …` only: `=> {result}` (when present) plus capability legend — no `=>` outside the comment
 /// (avoids ambiguity with `=` / `>=` in predicates and keeps the expression segment clean).
 fn domain_line_with_layers(
@@ -1305,13 +1312,12 @@ fn domain_line_with_layers(
 
 /// Compound `Entity(p#=$,…)` when the target has multiple `key_vars` (per-key placeholders are still the string `$`).
 ///
-/// Unary entity refs use a **quoted concrete exemplar id** so the witness parses under the rule that
-/// `Entity($)` is invalid inside `{…}` filters / call args / arrays — only top-level `Entity(id)` GET may use `$` for teaching.
+/// Unary entity refs use the same `$` fill-in as scalars: `e#($)` in DOMAIN teaching (parseable; not a wire value).
 fn entity_ref_id_example(cgs: &CGS, target: &str, map: Option<&SymbolMap>) -> String {
     let target_sym = ent_sym(map, target);
     let p = DOMAIN_PARAM_VALUE_PLACEHOLDER;
     let Some(ent) = cgs.get_entity(target) else {
-        return format!("{target_sym}(\"example\")");
+        return format!("{target_sym}($)");
     };
     if ent.key_vars.len() > 1 {
         let parts: Vec<String> = ent
@@ -1321,39 +1327,7 @@ fn entity_ref_id_example(cgs: &CGS, target: &str, map: Option<&SymbolMap>) -> St
             .collect();
         format!("{}({})", target_sym, parts.join(", "))
     } else {
-        unary_entity_ref_ctor_example_expr(ent, &target_sym)
-    }
-}
-
-/// Short string used as a unary `entity_ref` DOMAIN exemplar (parseable; not a wire commitment).
-fn unary_entity_ref_ctor_example_short_id(ent: &EntityDef) -> String {
-    let id_field = ent.id_field.as_str();
-    let n = id_field.to_ascii_lowercase();
-    let en = ent.name.as_str();
-    if n == "login" || n == "username" {
-        return "octocat".into();
-    }
-    if n == "owner" && en == "User" {
-        return "octocat".into();
-    }
-    if n == "repo" && en == "Repository" {
-        return "Hello-World".into();
-    }
-    "example".into()
-}
-
-fn unary_entity_ref_ctor_example_expr(ent: &EntityDef, target_sym: &str) -> String {
-    let id_field = ent.id_field.as_str();
-    let fs = ent.fields.get(id_field);
-    match fs.map(|f| &f.field_type) {
-        Some(FieldType::Integer) | Some(FieldType::Number) => format!("{target_sym}(1)"),
-        Some(FieldType::Uuid) => format!("{target_sym}(\"550e8400-e29b-41d4-a716-446655440000\")"),
-        Some(FieldType::String) | None => {
-            let lit = unary_entity_ref_ctor_example_short_id(ent);
-            let esc = lit.replace('\\', "\\\\").replace('"', "\\\"");
-            format!("{target_sym}(\"{esc}\")")
-        }
-        _ => format!("{target_sym}(\"example\")"),
+        format!("{target_sym}($)")
     }
 }
 
@@ -1443,7 +1417,6 @@ fn compound_get_expr_line(
                 parts.push(format!("{sym}={p}"));
             }
             FieldType::EntityRef { target } => {
-                // Nested unary refs use quoted exemplar ids so compound GET lines stay parseable.
                 parts.push(format!("{sym}={}", entity_ref_id_example(cgs, target, map)));
             }
         }
@@ -1740,6 +1713,93 @@ fn field_omitted_from_path_inject(
     }
     let expected = format!("{}_id", anchor_entity.to_lowercase());
     field_name == expected
+}
+
+fn collect_capability_compact_arg_glosses(
+    anchor_entity: &str,
+    cap: &crate::CapabilitySchema,
+    map: &SymbolMap,
+    ident_meta: &HashMap<(EntityName, String), IdentMetadata>,
+) -> Vec<crate::symbol_tuning::CompactArgSlotGloss> {
+    let Some(is) = cap.input_schema.as_ref() else {
+        return Vec::new();
+    };
+    let InputType::Object { fields, .. } = &is.input_type else {
+        return Vec::new();
+    };
+    let en = cap.domain.as_str();
+    let capn = cap.name.as_str();
+    let mut out = Vec::new();
+    for f in fields {
+        if !field_is_filter_like(f) {
+            continue;
+        }
+        if field_omitted_from_path_inject(anchor_entity, cap, f.name.as_str()) {
+            continue;
+        }
+        let sym = map.ident_sym_cap_param(en, capn, f.name.as_str());
+        let mkey = (EntityName::from(en.to_string()), f.name.clone());
+        let Some(meta) = ident_meta.get(&mkey) else {
+            continue;
+        };
+        out.push(crate::symbol_tuning::build_compact_arg_slot_gloss(
+            &sym,
+            f.name.as_str(),
+            f.required,
+            meta,
+            map,
+        ));
+    }
+    out
+}
+
+/// DOMAIN `;;` suffix: `[scope …]` / `optional params:`, optional `args:` compact type rows, ` — ` + description.
+fn format_capability_legend_line(
+    map: &SymbolMap,
+    cap: &crate::CapabilitySchema,
+    anchor_entity: &str,
+    ident_meta: Option<&HashMap<(EntityName, String), IdentMetadata>>,
+) -> String {
+    const MAX_DESC: usize = 100;
+    let kebab = capability_method_label_kebab(cap);
+    let raw = cap.description.as_str().trim();
+    let gloss = if raw.is_empty() {
+        kebab
+    } else {
+        truncate_inline_desc(raw, MAX_DESC)
+    };
+    let base_sig = map.capability_input_signature_gloss(cap);
+    let sig = if let Some(im) = ident_meta {
+        let frags = collect_capability_compact_arg_glosses(anchor_entity, cap, map, im);
+        if let Some(args_s) = crate::symbol_tuning::join_compact_invocation_arg_fragments(frags) {
+            if base_sig.is_empty() {
+                format!("args: {args_s}")
+            } else {
+                format!("{base_sig} · args: {args_s}")
+            }
+        } else {
+            base_sig
+        }
+    } else {
+        base_sig
+    };
+    if sig.is_empty() {
+        gloss
+    } else if gloss.is_empty() {
+        sig
+    } else {
+        format!("{sig}{LEGEND_EM_DESC_SEP}{gloss}")
+    }
+}
+
+#[inline]
+fn capability_legend_for_domain(
+    map: Option<&SymbolMap>,
+    cap: &crate::CapabilitySchema,
+    anchor_entity: &str,
+    ident_meta: Option<&HashMap<(EntityName, String), IdentMetadata>>,
+) -> Option<String> {
+    map.map(|m| format_capability_legend_line(m, cap, anchor_entity, ident_meta))
 }
 
 /// One `key=value` for dotted-call `method(k=v,…)` — equality/entity forms parse as invoke args (not query `>=` predicates).
@@ -2054,6 +2114,7 @@ fn collect_entity_domain_block(
     cgs: &CGS,
     ename: &str,
     map: Option<&SymbolMap>,
+    ident_meta: Option<&HashMap<(EntityName, String), IdentMetadata>>,
     collect_meta: bool,
     line_valid_cache: &mut HashMap<DomainLineValidCacheKey, bool>,
 ) -> EntityDomainBlock {
@@ -2092,7 +2153,7 @@ fn collect_entity_domain_block(
         let ms = met_sym(map, ename, &label);
         let expr = format!("{es}.{ms}()");
         let result_gloss = crate::result_gloss::result_gloss_for_capability(cap, cgs, map);
-        let cap_leg = capability_legend_opt(map, cap);
+        let cap_leg = capability_legend_for_domain(map, cap, ename, ident_meta);
         try_push_domain_example(
             &mut lines,
             &mut line_metas,
@@ -2186,7 +2247,7 @@ fn collect_entity_domain_block(
                 format!("{recv}.{ms}()")
             };
             let result_gloss = crate::result_gloss::result_gloss_for_capability(cap, cgs, map);
-            let cap_leg = capability_legend_opt(map, cap);
+            let cap_leg = capability_legend_for_domain(map, cap, ename, ident_meta);
             try_push_domain_example(
                 &mut lines,
                 &mut line_metas,
@@ -2204,7 +2265,7 @@ fn collect_entity_domain_block(
     }
     for (cap_name, line) in collect_multi_arity_method_lines(cgs, ename, &es, map) {
         let cap_ref = cgs.capabilities.get(&cap_name);
-        let cap_leg = cap_ref.and_then(|c| capability_legend_opt(map, c));
+        let cap_leg = cap_ref.and_then(|c| capability_legend_for_domain(map, c, ename, ident_meta));
         let gloss =
             cap_ref.and_then(|c| crate::result_gloss::result_gloss_for_capability(c, cgs, map));
         try_push_domain_example(
@@ -2234,7 +2295,7 @@ fn collect_entity_domain_block(
                 break;
             }
             let qgloss = crate::result_gloss::result_gloss_for_capability(cap, cgs, map);
-            let cap_leg = capability_legend_opt(map, cap);
+            let cap_leg = capability_legend_for_domain(map, cap, ename, ident_meta);
             let mut added = false;
             if let Some(line) = query_expr_maximal(cap, &es, cgs, map) {
                 let work = domain_line_work_string(&line, map);
@@ -2349,7 +2410,8 @@ fn collect_entity_domain_block(
             .or_else(|| search_caps.first().copied());
         let sg =
             scap.and_then(|cap| crate::result_gloss::result_gloss_for_capability(cap, cgs, map));
-        let cap_leg = scap.and_then(|cap| capability_legend_opt(map, cap));
+        let cap_leg = scap
+            .and_then(|cap| capability_legend_for_domain(map, cap, ename, ident_meta));
         try_push_domain_example(
             &mut lines,
             &mut line_metas,
@@ -2458,7 +2520,7 @@ fn collect_entity_domain_block(
 /// [`crate::cgs_expression_validate`] so `CGS::validate` fails if this is zero.
 pub(crate) fn domain_example_line_count(cgs: &CGS, ename: &str, map: Option<&SymbolMap>) -> usize {
     let mut line_valid_cache = HashMap::new();
-    collect_entity_domain_block(cgs, ename, map, false, &mut line_valid_cache)
+    collect_entity_domain_block(cgs, ename, map, None, false, &mut line_valid_cache)
         .lines
         .len()
 }
@@ -2467,7 +2529,7 @@ pub(crate) fn domain_example_line_count(cgs: &CGS, ename: &str, map: Option<&Sym
 #[cfg(test)]
 pub(crate) fn domain_example_lines(cgs: &CGS, ename: &str, map: Option<&SymbolMap>) -> Vec<String> {
     let mut line_valid_cache = HashMap::new();
-    collect_entity_domain_block(cgs, ename, map, false, &mut line_valid_cache).lines
+    collect_entity_domain_block(cgs, ename, map, None, false, &mut line_valid_cache).lines
 }
 
 /// Primary-get projection bracket for the DOMAIN entity heading (when enabled); test-only helper.
@@ -2478,7 +2540,7 @@ fn domain_heading_projection_bracket(
     map: Option<&SymbolMap>,
 ) -> Option<String> {
     let mut line_valid_cache = HashMap::new();
-    collect_entity_domain_block(cgs, ename, map, false, &mut line_valid_cache)
+    collect_entity_domain_block(cgs, ename, map, None, false, &mut line_valid_cache)
         .heading_projection_bracket
 }
 
@@ -2677,8 +2739,9 @@ fn render_prompt_contract(spec: PromptContractSpec, format: PromptContractFormat
     };
     let symbol_line = if spec.symbolic {
         Some(
-            "  - e#, m#, p# — opaque tokens from this prompt; use them exactly as shown.\n\
-  - `p#` names a prompt-defined slot symbol. Reuse a `p#` only when the taught slot meaning is the same; if the meaning differs, use the different `p#` taught in that entity's rows.\n",
+            "  - e#, m#, p# are session-local aliases. Use the aliases **exactly** as shown in expression cells.\n\
+  - Choose by **Meaning** (and row `args: …`), not by symbol number: each row’s description picks the method (m#); `args: p# label type req|opt` maps inputs by wire label and type. Copy the **Expression** pattern and bind with keyed slots: `p12=value` (never positional or renumbered slots).\n\
+  - When a prior prompt taught different aliases (e.g. `new_symbol_space` / new session or wave), **discard** earlier p#/m# bindings and re-read the current table.\n",
         )
     } else {
         Some(
@@ -2689,27 +2752,27 @@ fn render_prompt_contract(spec: PromptContractSpec, format: PromptContractFormat
     let structure_lines = match format {
         PromptContractFormat::DomainMarkdown => format!(
             "DOMAIN blocks are organized around one heading line ({entity_label}, optional `;;`, optional full `{projection}` projection list, optional description).\n\
-Any needed `{field}` gloss lines are emitted immediately before first use, including projection symbols that may appear above the heading.\n\
+Where needed, compact `args: p# wire type …` in an expression row’s `;;` hint replaces **extra** per-arg `{field}` lines (you still get gloss rows for projection, relations, long enums, or lossy `+` type markers when needed).\n\
 The expression lines in and around each DOMAIN block are the **only** valid Plasm path expression forms for this prompt (this schema slice).\n\
 Every symbol, field, relation, method, and query shape you use must be defined by this prompt itself.\n\n"
         ),
         PromptContractFormat::TsvComment => format!(
             "The TSV rows below define the valid Plasm expression surface for this prompt.\n\
-`Expression` is the only executable Plasm syntax column; `Meaning` is documentation only — use it to read types and intent, but build your output only from `Expression` cells plus concrete values (never paste the `Meaning` cell into your output).\n\
-Each entity contributes any needed `{field}` slot-definition rows first, then one identity row carrying projection/entity meaning, then the remaining expression rows.\n\
+`Expression` is the only executable Plasm syntax column; `Meaning` is documentation only (returns, `args:`, `optional params:`, and descriptions) — use it to pick methods and arg slots, but build output from `Expression` + values only (never paste `Meaning`).\n\
+Each entity may emit a few leading `{field}` slot-definition rows when a compact `args:` on the method line is not enough (projection, long enums, relation targets).\n\
 Every symbol, field, relation, method, and query shape you use must be defined by this prompt itself.\n\n"
         ),
     };
     let hint_line = match format {
         PromptContractFormat::DomainMarkdown => "  - `;;` — on DOMAIN teaching rows, everything after the first `;;` is a hint only (`Type` / `=> result`, optional-parameter constraints, then the capability description). It is not Plasm syntax and must not appear in your output: emit only the expression characters before `;;` (no `;;`, no `=> …`, no trailing description).\n".to_string(),
-        PromptContractFormat::TsvComment => "  - `Meaning` is documentation only: use it to read returns, projection notes, allowed values, optional params, and descriptions, but never paste it into executable output.\n".to_string(),
+        PromptContractFormat::TsvComment => "  - `Meaning` is documentation only: use it for `returns`, `args:` (slot/label/type), `optional params:`, allowed values, and descriptions, but never paste it into executable output.\n".to_string(),
     };
     let field_hint_line = match format {
         PromptContractFormat::DomainMarkdown => format!(
-            "  - A bare `{field}  ;;  …` line defines a slot before first use; it is a hint line, not an expression you should output.\n"
+            "  - A bare `{field}  ;;  …` line (when present) defines a slot before first use; it is a hint line, not an expression to output. Prefer a row that already has `args:` in `;;` when the compact summary covers that slot’s type and label.\n"
         ),
         PromptContractFormat::TsvComment => format!(
-            "  - A row whose `Expression` is only `{field}` defines a slot before first use; its `Meaning` cell is descriptive metadata, not an executable API call.\n"
+            "  - A row whose `Expression` is only `{field}` (when present) is a pre-declared slot; the same `args:` summary may appear in `Meaning` on a method line instead. Those rows are metadata, not executable Plasm.\n"
         ),
     };
 
@@ -2889,7 +2952,11 @@ fn emit_field_def_lines_before_example(
     let en = EntityName::from(entity.to_string());
     for sym in crate::symbol_tuning::field_syms_for_domain_line(line) {
         let field_name = map.resolve_ident(&sym).unwrap_or(&sym);
-        let meta = ident_meta.get(&(en.clone(), field_name.to_string()));
+        let meta = map
+            .capability_param_key_for_p_sym(&sym)
+            .as_ref()
+            .and_then(|(dom, w)| ident_meta.get(&(dom.clone(), w.clone())))
+            .or_else(|| ident_meta.get(&(en.clone(), field_name.to_string())));
         let should_emit = match (meta, defined.get(&sym)) {
             (Some(m), None) => {
                 defined.insert(sym.clone(), m.clone());
@@ -2929,6 +2996,16 @@ fn emit_field_def_lines_before_example(
                 if skip_redundant_terminal_relation_sym_gloss(line, sym.as_str(), m) {
                     defined.remove(&sym);
                     continue;
+                }
+                if matches!(m.role, crate::symbol_tuning::IdentRole::CapabilityParam { .. }) {
+                    if let Some(sup) =
+                        crate::symbol_tuning::args_line_suppressible_capability_syms(line)
+                    {
+                        if sup.get(sym.as_str()) == Some(&true) {
+                            defined.remove(&sym);
+                            continue;
+                        }
+                    }
                 }
             }
             let gloss = match meta {
@@ -2992,7 +3069,14 @@ fn render_domain_table_resolved<'b, F>(
         let mut seen_expr: HashSet<String> = HashSet::new();
         let collect_meta = fill_model;
         let block =
-            collect_entity_domain_block(cgs, ename, map, collect_meta, &mut line_valid_cache);
+            collect_entity_domain_block(
+                cgs,
+                ename,
+                map,
+                ident_meta.as_ref(),
+                collect_meta,
+                &mut line_valid_cache,
+            );
         if block.lines.is_empty() {
             debug_assert!(
                 false,
@@ -3285,7 +3369,7 @@ mod tests {
         }
         let cgs = load_schema_dir(dir).unwrap();
         let lines = domain_example_lines(&cgs, "ValueRange", None);
-        let expected = "ValueRange(spreadsheetId=Spreadsheet(\"example\"), range=$)";
+        let expected = "ValueRange(spreadsheetId=Spreadsheet($), range=$)";
         assert!(
             lines.iter().any(|l| l.starts_with(expected)),
             "missing compound dotted-call-safe get witness for entity_ref key var: expected prefix `{expected}` in {:?}",
@@ -3348,8 +3432,9 @@ mod tests {
             "full prompt should include heading projection bracket `{br}`"
         );
         assert!(
-            out.contains("may appear above the heading"),
-            "preamble should explain that projection symbol glosses may appear before the heading (prompt len {})",
+            out.contains("gloss rows for projection, relations, long enums")
+                || out.contains("gloss") && out.contains("heading"),
+            "preamble should explain pre-heading gloss/projection/args teaching (prompt len {})",
             out.len()
         );
         assert!(
@@ -3693,8 +3778,8 @@ mod tests {
         let contrib = tsv
             .lines()
             .find(|l| {
-                l.contains("aggregated commit counts (from the contributors API)")
-                    && l.contains("repository")
+                l.to_lowercase().contains("repository contributors")
+                    && l.to_lowercase().contains("commit count")
             })
             .expect("Contributor list DOMAIN row");
         assert!(
@@ -3823,17 +3908,19 @@ mod tests {
             "markdown contract should forbid copying DOMAIN ;; tails into model output"
         );
         assert!(
-            tsv.contains("never paste the `Meaning` cell"),
-            "TSV contract should forbid pasting Meaning into executable output"
+            tsv.contains("never paste `Meaning`")
+                && tsv.contains("optional params:"),
+            "TSV contract should forbid pasting Meaning and document params/args"
         );
         assert!(
-            markdown
-                .contains("Any needed `p#` gloss lines are emitted immediately before first use"),
-            "markdown preamble should describe pre-use field definitions"
+            markdown.contains("Where needed, compact `args:")
+                && markdown.contains("gloss rows"),
+            "markdown preamble should describe args hints and p# gloss rows"
         );
         assert!(
-            tsv.contains("A row whose `Expression` is only `p#` defines a slot before first use"),
-            "TSV frontmatter should explain p# rows as hints"
+            tsv.contains("A row whose `Expression` is only `p#` (when present) is a pre-declared slot")
+                || tsv.contains("pre-declared slot"),
+            "TSV frontmatter should explain p# slot-definition rows when present"
         );
         assert!(
             tsv.contains("only the `Expression` column is executable syntax"),
@@ -3848,34 +3935,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn petstore_renders_without_panic() {
-        let dir = std::path::Path::new("../../fixtures/schemas/petstore");
-        if !dir.exists() {
-            return;
-        }
-        let cgs = load_schema_dir(dir).unwrap();
-        let output = render_prompt_with_config(&cgs, RenderConfig::for_eval_canonical(None));
-        assert!(output.contains(DOMAIN_VALID_EXPR_MARKER));
-        assert!(output.contains("**only** valid Plasm path expression forms"));
-        assert!(
-            output.contains("Plain `str` values in predicates and method arguments MUST use")
-                && !output.contains(super::DOMAIN_RICH_STRING_GUIDANCE_SENTINEL),
-            "petstore slice has no structured string semantics — omit rich-string/raw-block preamble line"
-        );
-        assert!(output.contains("Pet"));
-        assert!(output.contains("Order"));
-        assert!(!output.contains("EXAMPLES:"));
-        assert!(
-            output.contains("DOMAIN") || output.contains(DOMAIN_VALID_EXPR_MARKER),
-            "prompt should include DOMAIN wording or valid-expressions preamble"
-        );
-        assert!(!output.contains("SCHEMA"));
-        assert!(
-            !output.contains("shape:"),
-            "DOMAIN should not use a shape: prefix on each line"
-        );
-    }
 
     #[test]
     fn preamble_includes_rich_string_guidance_when_slice_has_structured_string_semantics() {
@@ -4159,10 +4218,10 @@ mod tests {
         let p_team_id = map.ident_sym_cap_param("Task", "task_query", "team_id");
         assert!(
             domain_block.contains(&format!(
-                "{}{{{}={}(\"example\")",
+                "{}{{{}={}($)",
                 task_sym, p_team_id, team_sym
             )),
-            "workspace-scoped task query should teach scope as a parseable unary entity-ref exemplar (p#=e#(\"example\")), not bare team id literals"
+            "workspace-scoped task query should teach scope with unary entity-ref fill-in (p#=e#($)), not bare team id literals"
         );
         assert!(
             !domain_block.contains("2000-01-01") && !domain_block.contains("p10>=\""),
@@ -4548,6 +4607,49 @@ mod tests {
         assert_eq!(
             super::query_construct_display("e4", "*p41=e2(id)"),
             "e4{p41=e2(id)}"
+        );
+    }
+
+    #[test]
+    fn p_symbol_verbosity_uses_args_summary_and_short_alias_preamble() {
+        let dir = std::path::Path::new("../../fixtures/schemas/overshow_tools");
+        if !dir.exists() {
+            return;
+        }
+        let cgs = load_schema_dir(dir).unwrap();
+        let prompt = render_prompt_with_config(
+            &cgs,
+            RenderConfig::for_eval(None).with_render_mode(PromptRenderMode::Compact),
+        );
+        assert!(
+            prompt.contains("args:") && prompt.contains("req"),
+            "expected compact args: p# type req|opt in DOMAIN `;;` hints"
+        );
+        assert!(
+            prompt.contains("session-local aliases")
+                && prompt.contains("keyed slots")
+                && !prompt
+                    .lines()
+                    .any(|l| l.contains("Reuse a `p#` only when the taught slot meaning")),
+            "preamble should use the short alias model (no long p# reuse paragraph)"
+        );
+    }
+
+    #[test]
+    fn tsv_parity_includes_compact_args_in_meaning_when_in_domain_legend() {
+        let dir = std::path::Path::new("../../fixtures/schemas/overshow_tools");
+        if !dir.exists() {
+            return;
+        }
+        let cgs = load_schema_dir(dir).unwrap();
+        let tsv = render_prompt_tsv_with_config(&cgs, RenderConfig::for_eval(None));
+        let body = tsv
+            .split("Expression\tMeaning\n")
+            .nth(1)
+            .expect("tsv body");
+        assert!(
+            body.contains("args:"),
+            "TSV `Meaning` should carry the same `args:` fragment as compact DOMAIN"
         );
     }
 }

@@ -2,33 +2,45 @@
 
 Most agent stacks hand the model a wall of JSON schemas, ask it to synthesize a valid payload, then pay again when malformed calls need validation, retries, and repair prompts. Plasm takes a different route: compile real API surfaces into a small, typed instruction layer that both the model and runtime understand.
 
-For example, `dump_prompt apis/github` renders a compact GitHub instruction surface like this:
+For example, `dump_prompt apis/github` renders a TSV like the following. The **Expression** / **Meaning** lines below are **verbatim** `dump_prompt` output: an Issue-focused slice starting at the `p204` gloss row, then the `Repository` get and search rows from the same run (re-run the tool if you need an exact current snapshot; symbols drift when the schema changes):
 
 ```tsv
 Expression	Meaning
-p304	str · owner
-p319	str · repo
-p297	int · number
-p350	str · title
-p336	select · allowed: open, closed
-e5(p304=$, p319=$, p297=$)	returns e5 · projection [p273,p304,p319,p297,p350,p237,p339,p336,...] · A GitHub issue in a repository
-e5{p39=e17(p304=$, p319=$), p42=$, p35=e19("octocat"), p37=$, p38=$, p40=$}	returns [e5] · optional params: p42, p35, p37, p38, p40 · List issues and pull requests in a repository
-e17(p304=$, p319=$)	returns e17 · projection [p273,p304,p319,p267,p253,p309,...] · A GitHub repository
-e17~$	returns [e17] · Search GitHub repositories.
+p204	int · id
+p214	int · number
+p245	str · title
+p176	markdown · body
+p238	select · allowed: open, closed
+p236	select · allowed: completed, reopened, not_planned, duplicate
+p209	bool · locked
+p177	date · closed_at
+e5(p217=$, p231=$, p214=$)	returns e5 · projection [p204,p217,p231,p214,p245,p176,p238,p236,p209,p180,p186,p248,p177,p203] · A GitHub issue in a repository
+e5(p217=$, p231=$, p214=$).m9()	returns () · Delete an issue (requires admin or sufficient repo permission).
+e5(p217=$, p231=$, p214=$).m13()	returns e5 · optional params: p45, p39, p44, p43, p40, p38, p42, p41 · args: p45 title str opt; p39 body markdown opt; p44 state sel[open,closed] opt; p43 state_reason sel[completed,reopened,not_planned,duplicate] opt; p40 labels ref:e7 opt; p38 assignees array[ref:e18] opt; p42 milestone ref:e8 opt; p41 locked bool opt · Update an issue.
+e5.m8(p25=e16(p217=$, p231=$), p26=$,..)	returns e5 · [scope p25→e16] · optional params: p22, p23, p21, p24 · args: p25 repository ref:e16 req; p26 title str req; p22 body markdown opt; p23 labels ref:e7 opt; p21 assignees array[ref:e18] opt; p24 milestone ref:e8 opt · Open a new issue in a repository.
+e5{p31=e16(p217=$, p231=$), p34=$, p27=e18($), p29=$, p30=$, p32=$}	returns [e5] · optional params: p34, p27, p29, p30, p32 · args: p31 repository ref:e16 req; p34 state sel[open,closed] opt; p27 assignee ref:e18 opt; p29 labels ref:e7 opt; p30 milestone ref:e8 opt; p32 since date opt · List issues and pull requests in a repository (this list endpoint returns both types).
+e5~$	returns [e5] · Search issues and pull requests globally. Prefix q with 'is:issue' to restrict to issues only.
+e5(p217=$, p231=$, p214=$).p255	returns e18
+e16(p217=$, p231=$)	returns e16 · projection [p204,p217,p231,p201,p190,p221,p200,p206,p235,p199,p215,p187,p172,p250,p186,p248,p228,p203] · A GitHub repository
+e16~$	returns [e16] · Search GitHub repositories.
 ```
 
-So the model does not need to manufacture a REST payload for “list open bug issues in `plasm/plasm`”; it can emit the constrained Plasm form:
+Method and query rows can include a compact `args: p# <wire> <type> <req|opt>; …` fragment in `Meaning` (and the same text in the `;;` tail for compact DOMAIN markdown). Example (same `dump_prompt` run):
 
-```plasm
-e5{p39=e17(p304="plasm", p319="plasm"), p42="open", p37="bug", p40="updated"}
+```tsv
+e19{p169=e16(p217=$, p231=$), p166=$, p167=$, p170=$, p165=e18($), p168=$}	returns [e19] · optional params: p166, p167, p170, p165, p168 · args: p169 repository ref:e16 req; p166 branch str opt; p167 event str opt; p170 status str opt; p165 actor ref:e18 opt; p168 head_sha str opt · List GitHub Actions workflow runs for a repository.
 ```
 
-The parser is deliberately lenient here. The compact `e#` / `p#` symbols are session-local shadows over the canonical CGS names, so a model can also emit the readable form, or mix the two, and Plasm expands the symbols before parsing. For short scalar and select values, quotes can be elided too:
+When a full `p#` row is needed (e.g. long `select+` / `array+` markers) or for projection, relations, and block headings, those lines appear separately. Details: [plasm-core: prompt surface](crates/plasm-core/README.md#prompt-surface).
+
+So the model does not need to manufacture a REST payload for “list open bug issues in `plasm/plasm`”; it can emit the constrained Plasm form using the **wire names** and entity symbols from the prompt (here `e5` is `Issue` and `e16` is `Repository` in the same table as above):
 
 ```plasm
 Issue{repository=Repository(owner=plasm, repo=plasm), state=open, labels=bug, sort=updated}
-e5{repository=e17(owner=plasm, repo=plasm), state=open, labels=bug, sort=updated}
+e5{repository=e16(p217=plasm, p231=plasm), state=open, labels=bug, sort=updated}
 ```
+
+The parser is deliberately lenient here. The compact `e#` / `p#` symbols are session-local shadows over the canonical CGS names, so a model can also emit the readable form, or mix the two, and Plasm expands the symbols before parsing. For short scalar and select values, quotes can be elided too. The list-query row in the table is the same goal in symbolic form, e.g. `e5{p31=e16(p217=plasm, p231=plasm), p34=open, p29=bug, …}`.
 
 ### Auto-correction feedback
 
@@ -53,9 +65,28 @@ Ambiguous recovery feedback:
 Pick one: Member{team_id=Team(id)} | Member{list_id=List(id)} | Member{task_id=Task(id)}
 ```
 
-On the current GitHub catalog, that full Plasm instruction surface is **20,282 characters** (about **5,070 tokens** by the renderer’s chars/4 heuristic) for 91 capabilities plus navigation forms. By comparison, the official `github-mcp-server` **v0.15.0** exposes 93 tools and its compact serialized `tools/list` schema surface is **64,129 characters** (about **16,032 tokens** by the same heuristic).
+**Prompt size (default TSV teaching table).** The renderer’s stderr line reports character count, a **heuristic** token estimate (`chars / 4`, see [`plasm_core::PromptSurfaceStats`]), the **~N tools (DOMAIN)** line count (synthesized Plasm path-expression rows), and **schema** counts: **capabilities** in the surface slice plus **nav** (relation and entity-ref navigation edges—same graph as DOMAIN relation lines). Run from **`plasm-oss/`** (or use `apis/` if your repo links it to this tree). Discard stdout to see only that summary:
 
-That difference gets larger once an agent needs more than one API. Plasm supports **intent-based catalog queries** (`discover_capabilities`) and **federated sessions**: the agent can ask for capabilities by goal, add only the relevant entities from GitHub, Linear, Slack, or another catalog, and keep one typed symbol space across them. In practice this is closer to a small query planner over API domains than a conventional MCP server that exposes a fixed list of independent tools.
+```text
+cargo build -q -p plasm-core --bin dump_prompt
+./target/debug/dump_prompt ./apis/github >/dev/null
+# dump_prompt: prompt built — 24797 chars | ~6199 tok (heuristic) | ~118 tools (DOMAIN) | 91 caps + 28 nav (schema); writing stdout …
+./target/debug/dump_prompt ./apis/clickup >/dev/null
+# dump_prompt: prompt built — 18294 chars | ~4573 tok (heuristic) | ~109 tools (DOMAIN) | 85 caps + 11 nav (schema); writing stdout …
+./target/debug/dump_prompt ./fixtures/schemas/overshow_tools >/dev/null
+# dump_prompt: prompt built — 7401 chars | ~1850 tok (heuristic) | ~15 tools (DOMAIN) | 13 caps + 2 nav (schema); writing stdout …
+```
+
+Representative full-catalog runs (same as stderr above; `cwd` = `plasm-oss/`):
+
+| Catalog (loaded CGS) | Prompt chars | ~Heuristic tokens (÷4) | ~DOMAIN tools (lines) | Capabilities (schema) | Nav / relations (schema) |
+|----------------------|-------------:|------------------------:|----------------------:|------------------------:|---------------------------:|
+| `apis/github` | 24,797 | 6,199 | 118 | 91 | 28 |
+| `apis/clickup` | 18,294 | 4,573 | 109 | 85 | 11 |
+
+For reference, the official `github-mcp-server` **v0.15.0** serialized `tools/list` surface is **64,129** characters (about **16,032** heuristic tokens by the same `÷4` rule) for **93** tool definitions—same order of comparison as the GitHub `apis/github` Plasm prompt row (**24,797** chars here), different artifact.
+
+With more than one API in play, Plasm’s **intent-based catalog queries** (`discover_capabilities`) and **federated sessions** let the agent add only the relevant entities (GitHub, Linear, Slack, another catalog) and keep one typed symbol space—closer to a small query planner over API domains than a single fixed `tools/list`.
 
 That means the agent works with **entities, relations, projections, and capabilities** instead of a flat pile of tool names and argument objects. The runtime can reject impossible calls before they hit a backend, batch graph-shaped work, attach multiple APIs to one session, and keep prompt volume lower as the tool surface grows. The goal is not “more connectors”; it is a tighter tool layer where schema compliance stops being the model’s job.
 

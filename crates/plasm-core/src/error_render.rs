@@ -307,25 +307,6 @@ fn string_semantics_for_wire_param(
 
 /// When [`ParseErrorKind::UnterminatedString`] fires after a `<<TAG` opener, return a targeted tagged-close correction
 /// (mirrors [`crate::expr_parser::value::Parser::parse_structured_heredoc`]).
-/// Imperative feedback when the model leaves `$` as the unary id inside a nested entity constructor.
-fn correction_unary_entity_ctor_placeholder(
-    entity_canon: &str,
-    style: &FeedbackStyle<'_>,
-) -> String {
-    match style {
-        FeedbackStyle::CanonicalDev => format!(
-            "Replace `{entity}($)` with a concrete id for `{entity}` (quoted string, number, or compound key form as DOMAIN shows for that entity). `$` is only a fill-in cue in prompts—it is not a legal wire value inside `{{}}` filters, `method(...)`, or `[...]`."
-            , entity = entity_canon
-        ),
-        FeedbackStyle::SymbolicLlm { map } => {
-            let es = map.entity_sym(entity_canon);
-            format!(
-                "Replace `{es}($)` with a real id for that entity symbol (use the quoted or numeric exemplar shape from DOMAIN for that ref slot). `$` must never appear as the argument to `{es}(…)` inside nested `{{…}}`, `m#(…)`, or `[…]`—substitute a value from the user's goal."
-            )
-        }
-    }
-}
-
 fn correction_unterminated_heredoc(prefix: &str) -> Option<String> {
     let bytes = prefix.as_bytes();
     let mut last_open = None;
@@ -570,9 +551,6 @@ pub fn render_parse_error_with_feedback(
         }
         ParseErrorKind::CapabilityMissingInternal { .. } => {
             "Internal schema error: capability missing after resolution (report upstream).".into()
-        }
-        ParseErrorKind::UnaryEntityCtorPlaceholderNotAllowed { entity } => {
-            correction_unary_entity_ctor_placeholder(entity.as_str(), &style)
         }
         ParseErrorKind::ManyRelationUnmaterialized {
             entity,
@@ -2188,32 +2166,6 @@ mod tests {
         assert!(
             se.correction.contains("`NOTE`") && se.correction.contains("hard newline"),
             "expected explicit tag and newline hint in correction: {}",
-            se.correction
-        );
-    }
-
-    #[test]
-    fn parse_error_unary_entity_ctor_placeholder_correction_demands_concrete_id() {
-        let dir = std::path::Path::new("../../apis/github");
-        if !dir.exists() {
-            return;
-        }
-        let cgs = loader::load_schema_dir(dir).unwrap();
-        let work = "Issue{assignee=User($)}";
-        let err = expr_parser::parse(work, &cgs).unwrap_err();
-        assert!(matches!(
-            err.kind,
-            expr_parser::ParseErrorKind::UnaryEntityCtorPlaceholderNotAllowed { .. }
-        ));
-        let se = render_parse_error(&err, work, &cgs);
-        assert!(
-            se.correction.contains("Replace") && se.correction.contains("concrete"),
-            "correction={}",
-            se.correction
-        );
-        assert!(
-            se.correction.contains("User") && se.correction.contains('$'),
-            "correction={}",
             se.correction
         );
     }

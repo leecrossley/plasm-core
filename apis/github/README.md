@@ -1,6 +1,6 @@
 # GitHub REST API — Plasm CGS Schema
 
-A [Plasm](../../README.md) domain model for the [GitHub REST API](https://docs.github.com/en/rest). The surface is **authored for agent workflows** (repos, issues, PRs, CI runs, collaborators, tags, etc.)—not a mechanical export of every OpenAPI operation. See **24** entities and **91** capabilities in the tables below (run `plasm schema validate apis/github` for the live count).
+A [Plasm](../../README.md) domain model for the [GitHub REST API](https://docs.github.com/en/rest). The surface is **authored for agent workflows** (repos, issues, PRs, CI runs, collaborators, tags, etc.)—not a mechanical export of every OpenAPI operation. The loaded CGS (see the tables below, or `plasm schema validate` / `dump_prompt`) currently has **19** entities and **67** capabilities.
 
 ```bash
 # Run against the live API (requires GITHUB_TOKEN in env)

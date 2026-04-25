@@ -268,9 +268,7 @@ entities:
     - owner
     - repo
     - number
-    description: >-
-      A GitHub pull request. Use this entity when the goal is to list, search,
-      filter, or update pull requests themselves.
+    description: A pull request in a repository.
     fields:
       repository_url:
         field_type: string
@@ -417,9 +415,7 @@ entities:
     - owner
     - repo
     - sha
-    description: >-
-      A Git commit identified by repository scope and commit SHA. Resolve branch/tag names
-      via the commit_get capability path segment (CML `sha`); the API accepts SHAs or ref names there.
+    description: A commit in a repository (owner, repo, and SHA; branch and tag names resolve in get).
     fields:
       owner:
         field_type: string
@@ -531,10 +527,7 @@ entities:
         cardinality: one
   PullRequestFile:
     id_field: filename
-    description: >-
-      A file changed inside one specific pull request diff. Use this only when
-      you already know the pull request number and want changed files for that
-      pull request, not when the goal is to discover or enumerate pull requests.
+    description: A file entry in a pull request diff.
     fields:
       filename:
         field_type: string
@@ -802,8 +795,7 @@ entities:
         cardinality: one
   Organization:
     id_field: login
-    description: >-
-      Organization profile keyed by login (public metadata, counts, and contact fields).
+    description: A GitHub organization.
     fields:
       login:
         field_type: string
@@ -861,7 +853,7 @@ entities:
     - org
     - id
     id_field: id
-    description: An organization-level GitHub issue type
+    description: Organization-scoped issue type.
     fields:
       org:
         field_type: string
@@ -907,8 +899,7 @@ entities:
         required: false
   Gist:
     id_field: id
-    description: >-
-      User-hosted gist (paste or small multi-file snippet) identified by gist id.
+    description: A user gist.
     fields:
       id:
         field_type: string
@@ -946,7 +937,7 @@ entities:
     - repo
     - id
     id_field: id
-    description: An inline review comment on a pull request diff (distinct from issue timeline comments)
+    description: Inline comment on a pull request review diff.
     fields:
       owner:
         field_type: string
@@ -1047,7 +1038,7 @@ entities:
         cardinality: one
   RepositoryTag:
     id_field: name
-    description: A lightweight tag pointing at a commit (not the same as a GitHub Release)
+    description: Git tag in a repository (not a GitHub Release).
     fields:
       owner:
         field_type: string
@@ -1076,7 +1067,7 @@ entities:
         required: false
   Contributor:
     id_field: login
-    description: Repository contributor with aggregated commit counts (from the contributors API)
+    description: Repository contributor with commit stats.
     fields:
       owner:
         field_type: string
@@ -1471,7 +1462,7 @@ entities:
         required: false
   Notification:
     id_field: id
-    description: One row in the notification inbox for subscribed activity (issues, pull requests, and similar)
+    description: A notification.
     fields:
       id:
         field_type: string
@@ -1563,10 +1554,7 @@ capabilities:
   auth_user_repos_query:
     kind: query
     entity: Repository
-    description: >-
-      List repositories the authenticated token can access via GET /user/repos (owned,
-      collaborator, and organization repos depending on affiliation). This is not the same
-      set as `public_repos` on the User profile.
+    description: List repositories the authenticated user can access.
     parameters:
     - name: visibility
       type: select
@@ -1580,7 +1568,7 @@ capabilities:
       required: false
       string_semantics: short
       description: >-
-        Comma-separated GitHub `affiliation` filter (owner, collaborator, organization_member).
+        Comma-separated: owner, collaborator, organization_member.
     - name: sort
       type: select
       allowed_values:
@@ -1623,9 +1611,7 @@ capabilities:
   repo_collaborators_query:
     kind: query
     entity: User
-    description: >-
-      List users who can access a given repository (collaborators / inherited access), scoped by `repository=…`.
-      This is not organization membership; use the org-scoped members query when the goal is “who is in org X”.
+    description: List users with access to a repository.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
     - name: repository
@@ -1687,8 +1673,7 @@ capabilities:
   issue_query:
     kind: query
     entity: Issue
-    description: >-
-      List issues and pull requests in a repository (this list endpoint returns both types).
+    description: List issues and pull requests in a repository.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
     - name: repository
@@ -1759,8 +1744,7 @@ capabilities:
   issue_search:
     kind: search
     entity: Issue
-    description: >-
-      Search issues and pull requests globally. Prefix q with 'is:issue' to restrict to issues only.
+    description: Search issues and pull requests globally.
     parameters:
     - name: q
       type: string
@@ -1848,8 +1832,7 @@ capabilities:
   pr_search:
     kind: search
     entity: PullRequest
-    description: >-
-      Search pull requests globally. Add 'is:pr' to q to restrict to PRs.
+    description: Search pull requests globally.
     parameters:
     - name: q
       type: string
@@ -1876,10 +1859,7 @@ capabilities:
   pr_touching_path_search:
     kind: query
     entity: PullRequest
-    description: >-
-      Search pull requests in a repository by path, crate, file, or directory
-      text. Use this when the goal is to find which pull requests touch a named
-      path or crate.
+    description: Search pull requests in a repository by path or file name text.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
     - name: repository
@@ -1891,9 +1871,7 @@ capabilities:
       type: string
       required: true
       string_semantics: short
-      description: >-
-        Path or crate text to match in the pull request search, such as a
-        directory name, file path fragment, or crate name.
+      description: Path or file name fragment to search for.
     - name: sort
       type: select
       allowed_values:
@@ -1967,9 +1945,7 @@ capabilities:
   pr_file_query:
     kind: query
     entity: PullRequestFile
-    description: >-
-      List files changed in one specific pull request. Requires a known pull
-      request number and returns file rows, not pull request rows.
+    description: List files changed in a pull request.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
     - name: owner
@@ -2050,9 +2026,7 @@ capabilities:
   pr_review_create:
     kind: create
     entity: PullRequestReview
-    description: >-
-      Start a pull request review, or submit it immediately when an event is
-      supplied.
+    description: Create or submit a pull request review.
     provides:
     - id
     - owner
@@ -2082,7 +2056,7 @@ capabilities:
       type: string
       required: false
       string_semantics: short
-      description: Commit SHA for the review; omit to let GitHub choose the latest pull request head.
+      description: Commit SHA to review; omit for the PR head.
     - name: event
       type: select
       allowed_values:
@@ -2117,9 +2091,7 @@ capabilities:
   pr_review_comment_create:
     kind: create
     entity: PullRequestReviewComment
-    description: >-
-      Add an inline review comment to a pull request diff, or reply to an
-      existing review comment.
+    description: Add or reply to an inline review comment.
     provides:
     - id
     - owner
@@ -2210,8 +2182,7 @@ capabilities:
   branch_get:
     kind: get
     entity: Branch
-    description: >-
-      Get branch metadata by owner, repo, and branch name (tip SHA, protection, URLs).
+    description: Get a branch by owner, repository, and name.
     provides:
     - owner
     - repo
@@ -2222,7 +2193,7 @@ capabilities:
   repo_tags_query:
     kind: query
     entity: RepositoryTag
-    description: List git tags for a repository (distinct from Releases).
+    description: List git tags in a repository.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
     - name: repository
@@ -2244,7 +2215,7 @@ capabilities:
     - name: anon
       type: boolean
       required: false
-      description: GitHub `anon` query parameter — include anonymous contributors (boolean filter, not a user reference).
+      description: Include anonymous contributors in commit counts.
   workflow_query:
     kind: query
     entity: Workflow
@@ -2348,7 +2319,7 @@ capabilities:
       - workflow_dispatch
       - workflow_run
       required: false
-      description: Event type that triggered the workflow (GitHub query enum).
+      description: Event type that triggered the run.
     - name: status
       type: select
       allowed_values:
@@ -2366,12 +2337,12 @@ capabilities:
       - requested
       - waiting
       required: false
-      description: Run status filter (GitHub Actions run status, not check conclusion).
+      description: Workflow run status.
     - name: actor
       type: entity_ref
       target: User
       required: false
-      description: Filter runs triggered by this user login (GitHub `actor` query param).
+      description: User who triggered the run.
     - name: head_sha
       type: string
       required: false
@@ -2687,9 +2658,7 @@ capabilities:
   org_members_query:
     kind: query
     entity: User
-    description: >-
-      List members of a GitHub organization (org roster), scoped by `org=…`.
-      For “who can access this repo” use the repository-collaborators query instead.
+    description: List members of a GitHub organization.
     parameters:
     - name: org
       type: entity_ref
@@ -3161,18 +3130,18 @@ capabilities:
       required: false
       items:
         type: string
-      description: Label names to apply (requires push access; otherwise silently dropped).
+      description: Label names to apply.
     - name: assignees
       type: array
       required: false
       items:
         type: entity_ref
         target: User
-      description: Assignee logins (requires push access; otherwise silently dropped).
+      description: Assignee logins.
     - name: milestone
       type: integer
       required: false
-      description: Milestone number in the repo (requires push access; otherwise silently dropped).
+      description: Milestone number.
   issue_update:
     kind: update
     entity: Issue
@@ -3246,7 +3215,7 @@ capabilities:
   issue_delete:
     kind: delete
     entity: Issue
-    description: Delete an issue (requires admin or sufficient repo permission).
+    description: Delete an issue.
   issue_sub_issue_add:
     kind: action
     entity: Issue
@@ -3475,7 +3444,7 @@ capabilities:
       required: false
     output:
       type: side_effect
-      description: Merge the pull request into its base branch when the API call succeeds.
+      description: Merge the pull request.
   pr_update_branch:
     kind: action
     entity: PullRequest
@@ -3488,7 +3457,7 @@ capabilities:
       description: Only update if the pull request head still has this SHA.
     output:
       type: side_effect
-      description: Start GitHub's branch update for the pull request when the API call succeeds.
+      description: Update the pull request head from the base branch.
   pr_create:
     kind: create
     entity: PullRequest
@@ -3522,8 +3491,7 @@ capabilities:
     - name: head
       type: string
       required: true
-      description: >-
-        Branch containing changes, or user:branch for cross-fork pull requests.
+      description: Head branch, or user:branch for a fork.
       string_semantics: short
     - name: base
       type: string
@@ -3540,11 +3508,11 @@ capabilities:
     - name: maintainer_can_modify
       type: boolean
       required: false
-      description: Allow upstream maintainers to edit this pull request (fork workflows).
+      description: Let maintainers of the base repo edit the head branch.
     - name: issue
       type: integer
       required: false
-      description: Existing issue number to convert into a pull request when the API allows.
+      description: Issue to turn into this pull request (optional).
   label_create:
     kind: create
     entity: Label
@@ -3612,7 +3580,7 @@ capabilities:
   repo_content_put:
     kind: action
     entity: Repository
-    description: Create or replace a file in a repository (base64 content per Contents API).
+    description: Create or update a file in a repository.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
     - name: repository
@@ -3631,7 +3599,7 @@ capabilities:
     - name: content
       type: blob
       required: true
-      description: File contents already base64-encoded for the GitHub Contents API JSON body.
+      description: New file content (base64).
     - name: branch
       type: string
       required: false
@@ -3643,11 +3611,11 @@ capabilities:
       string_semantics: short
     output:
       type: side_effect
-      description: Creates or replaces the file at the path when the API call succeeds.
+      description: Write the file at the path.
   repo_content_delete:
     kind: action
     entity: Repository
-    description: Delete a file from a repository via the Contents API (requires commit message and blob SHA).
+    description: Delete a file from a repository.
     scope_aggregate_key_policy: omit_when_redundant
     parameters:
     - name: repository
@@ -3674,7 +3642,7 @@ capabilities:
       string_semantics: short
     output:
       type: side_effect
-      description: Deletes the file at the path when the API call succeeds.
+      description: Remove the file at the path.
 oauth:
   provider: github
   scopes:

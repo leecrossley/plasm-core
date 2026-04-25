@@ -1617,27 +1617,30 @@ impl ServerHandler for PlasmMcpHandler {
                     if let Some(front) = tsv_from_waves {
                         plasm.insert("tsv_static_frontmatter".to_string(), json!(front));
                     }
-                    let continuity = if out.stale_execute_binding_recovered {
-                        let mut c = serde_json::Map::new();
-                        c.insert("stale_binding_recovered".to_string(), json!(true));
+                    let mut continuity = serde_json::Map::new();
+                    continuity.insert(
+                        "stale_binding_recovered".to_string(),
+                        json!(out.stale_execute_binding_recovered),
+                    );
+                    if out.stale_execute_binding_recovered {
                         if let Some((ref ph, ref sid)) = out.stale_binding_previous {
-                            c.insert(
+                            continuity.insert(
                                 "previous_execute".to_string(),
                                 json!({ "prompt_hash": ph, "session_id": sid }),
                             );
                         }
-                        let open = out.waves.iter().find(|w| w.mode == "open");
-                        let new_symbol_space = !open.is_some_and(|w| w.reused_session);
-                        c.insert("new_symbol_space".to_string(), json!(new_symbol_space));
-                        Some(c)
-                    } else {
-                        let mut c = serde_json::Map::new();
-                        c.insert("stale_binding_recovered".to_string(), json!(false));
-                        Some(c)
-                    };
-                    if let Some(c) = continuity {
-                        plasm.insert("continuity".to_string(), serde_json::Value::Object(c));
                     }
+                    continuity.insert(
+                        "new_symbol_space".to_string(),
+                        json!(out.new_symbol_space),
+                    );
+                    if out.new_symbol_space {
+                        continuity.insert(
+                            "discard_cached_plasm_symbols".to_string(),
+                            json!(true),
+                        );
+                    }
+                    plasm.insert("continuity".to_string(), serde_json::Value::Object(continuity));
                     if !plasm.is_empty() {
                         let mut meta = serde_json::Map::new();
                         meta.insert("plasm".to_string(), serde_json::Value::Object(plasm));
